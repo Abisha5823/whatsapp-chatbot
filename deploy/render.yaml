@@ -1,0 +1,34 @@
+services:
+  - type: web
+    name: whatsapp-chatbot
+    runtime: python
+    repo: https://github.com/yourusername/whatsapp-chatbot
+    plan: free
+    region: oregon
+    buildCommand: |
+      pip install -r requirements.txt
+      mkdir -p data/knowledge
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PORT
+        value: 8000
+      - key: WHATSAPP_ACCESS_TOKEN
+        sync: false
+      - key: WHATSAPP_PHONE_NUMBER_ID
+        sync: false
+      - key: VERIFY_TOKEN
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: MONGODB_URI
+        sync: false
+      - key: MONGODB_DB_NAME
+        value: whatsapp_chatbot
+      - key: BUSINESS_NAME
+        value: Solar Solutions Tamil Nadu
+      - key: ASSISTANT_NAME
+        value: Solar Assistant
+      - key: OWNER_EMAIL
+        sync: false
+      - key: OWNER_PHONE
+        sync: false
