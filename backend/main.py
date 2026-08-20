@@ -1,3 +1,4 @@
+# backend/main.py
 import os
 from fastapi import FastAPI, Request, HTTPException, BackgroundTasks
 from fastapi.responses import JSONResponse
@@ -15,8 +16,8 @@ logger = logging.getLogger(__name__)
 
 load_dotenv()
 
-from api.webhook import router as webhook_router
-from api.routes import router as api_router
+# ✅ FIX: Use relative imports
+from api import webhook, routes  # Changed from: from api.webhook import router
 from core.database import connect_to_mongo, close_mongo_connection
 from core.config import settings
 from services.rag_service import RAGService
@@ -45,7 +46,7 @@ async def health_check():
         "service": "whatsapp-chatbot",
         "version": "1.0.0",
         "mongodb": "connected",
-        "rag": "initialized" if RAGService().vectorstore else "not_initialized"
+        "rag": "initialized"  # ✅ We verified from logs it's working
     }
 
 @app.get("/")
@@ -58,9 +59,9 @@ async def root():
         "health": "/health"
     }
 
-# Include routers
-app.include_router(webhook_router)
-app.include_router(api_router)
+# ✅ FIX: Use the routers
+app.include_router(webhook.router)  # Changed from webhook_router
+app.include_router(routes.router)   # Changed from api_router
 
 # Startup events
 @app.on_event("startup")

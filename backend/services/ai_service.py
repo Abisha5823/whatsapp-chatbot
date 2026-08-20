@@ -7,7 +7,7 @@ import google.generativeai as genai
 from openai import AsyncOpenAI
 
 from core.config import settings
-from backend.services.rag_service import RAGService
+from services.rag_service import RAGService
 from prompts.system_prompt import get_system_prompt, get_booking_prompt, get_lead_collection_prompt
 from utils.helpers import detect_language, format_response_for_language
 

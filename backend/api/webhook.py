@@ -1,3 +1,4 @@
+# backend/api/webhook.py
 from fastapi import APIRouter, Request, HTTPException, BackgroundTasks
 from fastapi.responses import JSONResponse
 from typing import Dict, Any
@@ -5,12 +6,14 @@ import json
 import logging
 from datetime import datetime
 
-from backend.services.whatsapp_service import WhatsAppService
-from backend.services.ai_service import AIService
-from backend.services.lead_service import LeadService
-from backend.services.booking_service import BookingService
-from backend.services.conversation_service import ConversationService
-from backend.services.rag_service import RAGService
+# ✅ FIX: Relative imports
+from services.whatsapp_service import WhatsAppService
+from services.ai_service import AIService
+from services.lead_service import LeadService
+from services.booking_service import BookingService
+from services.conversation_service import ConversationService
+from services.rag_service import RAGService
+from services.voice_service import VoiceService
 from core.config import settings
 
 router = APIRouter()
@@ -65,24 +68,29 @@ async def process_message(message: Dict[str, Any], metadata: Dict[str, Any]):
     """Process incoming message asynchronously"""
     try:
         chat_id = message.get("from")
-        msg_type = message.get("type")
+        msg_type = message.get("type")  # May be None in test payloads
+        
+        # ✅ If type is missing but text exists, assume it's a text message
+        if not msg_type and message.get("text"):
+            msg_type = "text"
         
         # Handle different message types
         if msg_type == "text":
             text = message.get("text", {}).get("body", "")
         elif msg_type == "voice":
-            # Voice note - download and transcribe
             voice_service = VoiceService()
             text = await voice_service.transcribe_voice(message)
         elif msg_type == "interactive":
-            # Interactive button/flow responses
             text = message.get("interactive", {}).get("button_reply", {}).get("title", "")
         else:
             logger.warning(f"Unsupported message type: {msg_type}")
             return
         
         if not text:
+            logger.warning("Empty message received")
             return
+        
+        # ... rest of the function
         
         # Get or create conversation
         conv_service = ConversationService()
@@ -113,7 +121,7 @@ async def process_message(message: Dict[str, Any], metadata: Dict[str, Any]):
             )
             if booking:
                 # Notify owner
-                from backend.services.notification_service import send_booking_notification
+                from services.notification_service import send_booking_notification
                 await send_booking_notification(booking)
         
         # Save lead if collected
@@ -124,7 +132,7 @@ async def process_message(message: Dict[str, Any], metadata: Dict[str, Any]):
                 # Sync to Google Sheets
                 await lead_service.sync_to_google_sheets(lead)
                 # Notify owner
-                from backend.services.notification_service import send_lead_notification
+                from services.notification_service import send_lead_notification
                 await send_lead_notification(lead)
         
         # Send response via WhatsApp
@@ -169,5 +177,5 @@ async def handle_human_handoff(chat_id: str, conversation: Dict):
     })
     
     # Send notification to owner
-    from backend.services.notification_service import send_handoff_notification
+    from services.notification_service import send_handoff_notification
     await send_handoff_notification(chat_id, conversation)

@@ -32,10 +32,12 @@ class RAGService:
         try:
             # Initialize embeddings
             if settings.USE_GEMINI:
+
                 self.embeddings = GoogleGenerativeAIEmbeddings(
-                    model="models/embedding-001",
-                    google_api_key=settings.GEMINI_API_KEY
-                )
+        model="models/gemini-embedding-2",  # ✅ Available from your list
+        google_api_key=settings.GEMINI_API_KEY,
+        task_type="retrieval_document"
+    )
             else:
                 self.embeddings = OpenAIEmbeddings(
                     api_key=settings.OPENAI_API_KEY,

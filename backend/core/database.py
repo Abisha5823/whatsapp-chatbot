@@ -27,13 +27,13 @@ async def connect_to_mongo():
 
 async def close_mongo_connection():
     """Close MongoDB connection"""
-    if db_instance.client:
+    if db_instance.client is not None:  # ✅ Use is not None
         db_instance.client.close()
         logger.info("MongoDB connection closed")
 
 async def get_database() -> AsyncIOMotorDatabase:
     """Get database instance"""
-    if not db_instance.db:
+    if db_instance.db is None:  # ✅ Use is None
         await connect_to_mongo()
     return db_instance.db
 

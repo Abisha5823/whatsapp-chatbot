@@ -10,7 +10,7 @@ class Settings(BaseSettings):
     
     # AI Provider
     GEMINI_API_KEY: Optional[str] = None
-    GEMINI_MODEL: str = "gemini-2.0-flash-exp"
+    GEMINI_MODEL: str = "gemini-3.6-flash"
     OPENAI_API_KEY: Optional[str] = None
     OPENAI_MODEL: str = "gpt-4-turbo"
     USE_GEMINI: bool = True

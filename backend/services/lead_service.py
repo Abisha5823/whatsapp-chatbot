@@ -5,7 +5,7 @@ from bson import ObjectId
 
 from core.database import get_collection
 from models.lead import Lead, LeadCreate
-from backend.services.google_sheets_service import GoogleSheetsService
+from services.google_sheets_service import GoogleSheetsService
 
 logger = logging.getLogger(__name__)
 

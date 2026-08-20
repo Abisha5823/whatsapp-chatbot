@@ -4,7 +4,7 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from typing import Dict, Any
 from core.config import settings
-from backend.services.whatsapp_service import WhatsAppService
+from services.whatsapp_service import WhatsAppService
 
 logger = logging.getLogger(__name__)
 
