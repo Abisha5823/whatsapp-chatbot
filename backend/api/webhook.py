@@ -4,6 +4,7 @@ from fastapi.responses import JSONResponse
 from typing import Dict, Any
 import json
 import logging
+import re
 from datetime import datetime
 
 # ✅ FIX: Relative imports
@@ -99,7 +100,79 @@ async def process_message(message: Dict[str, Any], metadata: Dict[str, Any]):
         language = detect_language(text)
         conversation["language"] = language
         
-        # ✅ NEW: Log current context for debugging
+        # ✅ Get context and ensure collected_fields exists
+        context = conversation.get("context", {})
+        if "collected_fields" not in context:
+            context["collected_fields"] = []
+        
+        # ✅ ✅ ✅ EXTRACT EMAIL FROM MESSAGE
+        email_pattern = r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}'
+        email_match = re.search(email_pattern, text)
+        if email_match and "email" not in context["collected_fields"]:
+            context["email"] = email_match.group(0).lower()
+            context["collected_fields"].append("email")
+            logger.info(f"📧 Extracted email: {context['email']}")
+        
+        # ✅ ✅ ✅ EXTRACT PHONE NUMBER FROM MESSAGE
+        phone_pattern = r'(\+?91)?[6-9]\d{9}'
+        phone_match = re.search(phone_pattern, text)
+        if phone_match and "phone" not in context["collected_fields"]:
+            phone = phone_match.group(0)
+            if not phone.startswith('+'):
+                phone = '+91' + phone if len(phone) == 10 else phone
+            context["phone"] = phone
+            context["collected_fields"].append("phone")
+            logger.info(f"📱 Extracted phone: {context['phone']}")
+        
+        # ✅ ✅ ✅ EXTRACT NAME (simple version)
+        name_patterns = [
+            r"(?:my name is |i am |i'm |name is |this is )([A-Za-z\s]+)",
+            r"^([A-Za-z\s]+)$"  # If message is just a name
+        ]
+        for pattern in name_patterns:
+            name_match = re.search(pattern, text.lower())
+            if name_match and "name" not in context["collected_fields"]:
+                name = name_match.group(1).strip().title()
+                if len(name) > 1 and len(name) < 30:  # Reasonable name length
+                    context["name"] = name
+                    context["collected_fields"].append("name")
+                    logger.info(f"👤 Extracted name: {context['name']}")
+                    break
+        
+        # ✅ ✅ ✅ EXTRACT DATE
+        date_keywords = ["tomorrow", "today", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+        for keyword in date_keywords:
+            if keyword in text.lower() and "preferred_date" not in context["collected_fields"]:
+                context["preferred_date"] = keyword
+                context["collected_fields"].append("preferred_date")
+                logger.info(f"📅 Extracted date: {context['preferred_date']}")
+                break
+        
+        # ✅ ✅ ✅ EXTRACT TIME
+        time_pattern = r'(\d{1,2})\s*(?:am|pm|:|o\'clock|\s*to\s*)'
+        time_match = re.search(time_pattern, text.lower())
+        if time_match and "preferred_time" not in context["collected_fields"]:
+            time_str = time_match.group(0)
+            # Clean up time format
+            time_str = time_str.replace('o clock', '').strip()
+            context["preferred_time"] = time_str
+            context["collected_fields"].append("preferred_time")
+            logger.info(f"🕐 Extracted time: {context['preferred_time']}")
+        
+        # ✅ ✅ ✅ EXTRACT MODE (online/offline)
+        if "offline" in text.lower() and "mode" not in context["collected_fields"]:
+            context["mode"] = "offline"
+            context["collected_fields"].append("mode")
+            logger.info(f"📍 Extracted mode: offline")
+        elif "online" in text.lower() and "mode" not in context["collected_fields"]:
+            context["mode"] = "online"
+            context["collected_fields"].append("mode")
+            logger.info(f"📍 Extracted mode: online")
+        
+        # ✅ Save extracted data back to conversation
+        conversation["context"] = context
+        
+        # ✅ Log current context for debugging
         logger.info(f"📝 Current context for {chat_id}: {conversation.get('context', {})}")
         
         # Check if user wants human handoff
@@ -114,48 +187,34 @@ async def process_message(message: Dict[str, Any], metadata: Dict[str, Any]):
             conversation=conversation
         )
         
-        # ✅ NEW: Extract and save lead data from response
-        # ✅ FIXED: Extract and save lead data from response with proper merging
+        # ✅ Extract lead data from response
         lead_data = response.get("lead_data", {})
-        context = conversation.get("context", {})
-
-    # Ensure collected_fields exists
-        if "collected_fields" not in context:
-            context["collected_fields"] = []
-
-    # Save lead data to context (preserving existing data)
+        
+        # ✅ Save lead data to context (preserving existing data)
         if lead_data:
-        # Update context with new lead data (don't overwrite existing)
-            if lead_data.get("name"):
+            if lead_data.get("name") and "name" not in context["collected_fields"]:
                 context["name"] = lead_data["name"]
-                if "name" not in context["collected_fields"]:
-                    context["collected_fields"].append("name")
-            if lead_data.get("phone"):
+                context["collected_fields"].append("name")
+            if lead_data.get("phone") and "phone" not in context["collected_fields"]:
                 context["phone"] = lead_data["phone"]
-                if "phone" not in context["collected_fields"]:
-                    context["collected_fields"].append("phone")
-            if lead_data.get("email"):
+                context["collected_fields"].append("phone")
+            if lead_data.get("email") and "email" not in context["collected_fields"]:
                 context["email"] = lead_data["email"]
-                if "email" not in context["collected_fields"]:
-                    context["collected_fields"].append("email")
-            if lead_data.get("service_interest"):
+                context["collected_fields"].append("email")
+            if lead_data.get("service_interest") and "service_interest" not in context["collected_fields"]:
                 context["service_type"] = lead_data["service_interest"]
-                if "service_interest" not in context["collected_fields"]:
-                    context["collected_fields"].append("service_interest")
-
-    # ✅ CRITICAL: Also check for lead data directly from AI response
-    # Sometimes the AI puts lead data directly in the response
+                context["collected_fields"].append("service_interest")
+        
+        # ✅ If AI says lead is collected but we don't have data, try to extract from reply
         if response.get("lead_collected") and not lead_data:
-        # Try to extract from the reply text
             reply = response.get("reply", "")
-        # Simple extraction for testing
-            import re
-            name_match = re.search(r"(?:name is |I am |I'm )(\w+)", reply.lower())
-            if name_match and not context.get("name"):
-                context["name"] = name_match.group(1).capitalize()
-                if "name" not in context["collected_fields"]:
-                    context["collected_fields"].append("name")
-
+            # Try to extract email from reply (user might have said it)
+            email_match = re.search(email_pattern, reply)
+            if email_match and "email" not in context["collected_fields"]:
+                context["email"] = email_match.group(0).lower()
+                context["collected_fields"].append("email")
+                logger.info(f"📧 Extracted email from reply: {context['email']}")
+        
         logger.info(f"📝 Merged context for {chat_id}: {context}")
         
         # Check for booking intent
@@ -165,18 +224,15 @@ async def process_message(message: Dict[str, Any], metadata: Dict[str, Any]):
                 chat_id, conversation, response
             )
             if booking:
-                # Notify owner
                 from services.notification_service import send_booking_notification
                 await send_booking_notification(booking)
         
         # Save lead if collected
         lead_service = LeadService()
-        if response.get("lead_collected", False):
+        if response.get("lead_collected", False) or len(context.get("collected_fields", [])) >= 2:
             lead = await lead_service.save_lead(chat_id, conversation, response)
             if lead:
-                # Sync to Google Sheets
                 await lead_service.sync_to_google_sheets(lead)
-                # Notify owner
                 from services.notification_service import send_lead_notification
                 await send_lead_notification(lead)
         
@@ -184,23 +240,22 @@ async def process_message(message: Dict[str, Any], metadata: Dict[str, Any]):
         whatsapp = WhatsAppService()
         await whatsapp.send_message(chat_id, response["reply"])
         
-        # ✅ UPDATED: Update conversation with proper context
+        # ✅ Update conversation with proper context
         await conv_service.update(chat_id, {
             "messages": conversation.get("messages", []) + [
                 {"role": "user", "content": text, "timestamp": datetime.utcnow().isoformat()},
                 {"role": "assistant", "content": response["reply"], "timestamp": datetime.utcnow().isoformat()}
             ],
-            "context": context,  # ✅ Save updated context
+            "context": context,
             "phase": response.get("phase", "lead_collection"),
             "updated_at": datetime.utcnow().isoformat()
         })
         
-        # ✅ NEW: Log what was saved
+        # ✅ Log what was saved
         logger.info(f"💾 Updated context for {chat_id}: {context}")
         
     except Exception as e:
         logger.error(f"Message processing error: {str(e)}")
-        # Send fallback message
         try:
             whatsapp = WhatsAppService()
             await whatsapp.send_message(
@@ -214,19 +269,16 @@ async def handle_human_handoff(chat_id: str, conversation: Dict):
     """Handle human handoff request"""
     whatsapp = WhatsAppService()
     
-    # Send acknowledgement
     await whatsapp.send_message(
         chat_id,
         "Sure! I'll connect you to our team. Please hold on while I find the best expert for you. 😊"
     )
     
-    # Log handoff request
     conv_service = ConversationService()
     await conv_service.update(chat_id, {
         "phase": "human_handoff",
         "handoff_requested_at": datetime.utcnow().isoformat()
     })
     
-    # Send notification to owner
     from services.notification_service import send_handoff_notification
     await send_handoff_notification(chat_id, conversation)

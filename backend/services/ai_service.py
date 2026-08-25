@@ -1,5 +1,6 @@
 import os
 import json
+import re
 from typing import Dict, Any, List, Optional
 import logging
 from datetime import datetime
@@ -49,15 +50,49 @@ class AIService:
             # Determine phase
             phase = conversation.get("phase", "greeting")
             
-            # ✅ Build lead collection status
-            lead_info = conversation.get("context", {})
-            collected_fields = lead_info.get("collected_fields", [])
+            # ✅ Get context and collected fields
+            context = conversation.get("context", {})
+            collected_fields = context.get("collected_fields", [])
             
-            # Check if lead info is collected
-            lead_collected = self._is_lead_collected(conversation)
+            # ✅ Extract email from message if present
+            email_match = re.search(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}', message)
+            if email_match and "email" not in collected_fields:
+                context["email"] = email_match.group(0)
+                collected_fields.append("email")
+                logger.info(f"📧 Extracted email: {context['email']}")
+
+            # ✅ Extract date/time from message
+            date_keywords = ["tomorrow", "today", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+            for keyword in date_keywords:
+                if keyword in message.lower() and "preferred_date" not in collected_fields:
+                    context["preferred_date"] = keyword
+                    collected_fields.append("preferred_date")
+                    break
+            
+            # ✅ Extract time from message (e.g., "10am", "10:00", "10")
+            time_match = re.search(r'(\d{1,2})\s*(?:am|pm|:|o\'clock)', message.lower())
+            if time_match and "preferred_time" not in collected_fields:
+                time_str = time_match.group(0)
+                context["preferred_time"] = time_str
+                collected_fields.append("preferred_time")
+                logger.info(f"🕐 Extracted time: {context['preferred_time']}")
+
+            # ✅ Extract mode (online/offline)
+            if "offline" in message.lower() and "mode" not in collected_fields:
+                context["mode"] = "offline"
+                collected_fields.append("mode")
+            elif "online" in message.lower() and "mode" not in collected_fields:
+                context["mode"] = "online"
+                collected_fields.append("mode")
+
+            # ✅ Update context with extracted data
+            conversation["context"] = context
+            
+            # Check if lead info is collected (name + phone)
+            lead_collected = "name" in collected_fields and "phone" in collected_fields
             
             # Build system prompt
-            if phase == "booking" or self._is_booking_intent(message):
+            if "booking" in collected_fields or self._is_booking_intent(message):
                 system_prompt = get_booking_prompt(settings.BUSINESS_NAME, settings.ASSISTANT_NAME)
                 phase = "booking"
             elif not lead_collected:
@@ -75,7 +110,10 @@ class AIService:
             # Build conversation history
             history = self._format_conversation_history(conversation.get("messages", []))
             
-            # ✅ Build prompt with lead collection status
+            # ✅ Build context summary for AI
+            context_summary = self._build_context_summary(context, collected_fields)
+            
+            # ✅ Build prompt with full context
             prompt = f"""
             {system_prompt}
             
@@ -89,39 +127,38 @@ class AIService:
             {message}
             
             ### Current Phase: {phase}
-            ### Lead Collected: {lead_collected}
             ### Language: {language}
             
-            ### Lead Collection Status:
-            - Name collected: {'name' in collected_fields}
-            - Phone collected: {'phone' in collected_fields}
-            - Email collected: {'email' in collected_fields}
-            - Service Interest collected: {'service_interest' in collected_fields}
-            - Current lead data: {json.dumps(lead_info)}
+            ### ✅ WHAT I ALREADY KNOW ABOUT THIS USER:
+            {context_summary}
             
-            **IMPORTANT RULES:**
-            1. Only ask for information you don't already have!
-            2. If name is already collected, don't ask for it again.
-            3. If phone is already collected, don't ask for it again.
-            4. If both name and phone are collected, move to answering their question.
-            5. Be natural and conversational - don't sound like a robot listing fields.
+            ### ✅ WHAT I HAVE ALREADY COLLECTED:
+            {', '.join(collected_fields) if collected_fields else 'Nothing yet'}
             
-            Provide a response that:
-            1. Answers the user's question using the context
-            2. Adapts to the language ({language})
-            3. If phase is lead_collection, collect name, phone, email naturally
-            4. If booking intent, follow booking flow
-            5. Be warm and conversational
+            ### ✅ IMPORTANT RULES (STRICTLY FOLLOW):
+            1. **NEVER ask for information I already have!**
+            2. Look at "WHAT I ALREADY KNOW" above.
+            3. If I already have name, phone, email, service_type - DO NOT ask again.
+            4. If the user says "I already said that" - apologize and move on.
+            5. Use the information I already have to answer their question.
+            6. Only ask for ONE piece of NEW information at a time.
+            7. If the user provides information I already have, acknowledge it and move forward.
             
-            Return your response as JSON with the following structure:
+            ### Instructions:
+            1. Answer the user's question using the context
+            2. Adapt to the language ({language})
+            3. If booking intent, follow booking flow
+            4. Be warm and conversational
+            
+            Return your response as JSON:
             {{
                 "reply": "Your response text",
                 "intent": "booking|lead|general|calculation",
                 "phase": "lead_collection|booking|general|human_handoff",
-                "lead_collected": true/false,
-                "lead_data": {{"name": "", "phone": "", "email": "", "service_interest": ""}},
-                "booking_data": {{"service": "", "date": "", "time": "", "mode": ""}},
-                "needs_human_handoff": true/false
+                "lead_collected": {str(lead_collected).lower()},
+                "lead_data": {{"name": "{context.get('name', '')}", "phone": "{context.get('phone', '')}", "email": "{context.get('email', '')}", "service_interest": "{context.get('service_type', '')}"}},
+                "booking_data": {{"service": "", "date": "{context.get('preferred_date', '')}", "time": "{context.get('preferred_time', '')}", "mode": "{context.get('mode', '')}"}},
+                "needs_human_handoff": false
             }}
             """
             
@@ -135,7 +172,6 @@ class AIService:
             
             # Parse response
             try:
-                # Extract JSON from response
                 response_text = response.strip()
                 if response_text.startswith("```json"):
                     response_text = response_text[7:]
@@ -143,22 +179,27 @@ class AIService:
                     response_text = response_text[:-3]
                 result = json.loads(response_text)
             except json.JSONDecodeError:
-                # Fallback: wrap in proper structure
                 result = {
                     "reply": response,
                     "intent": "general",
                     "phase": phase,
-                    "lead_collected": False,
+                    "lead_collected": lead_collected,
                     "lead_data": {},
                     "booking_data": {},
                     "needs_human_handoff": False
                 }
             
-            # ✅ If lead data was extracted, mark as collected in result
-            if result.get("lead_data"):
-                for field in ["name", "phone", "email", "service_interest"]:
-                    if result["lead_data"].get(field):
-                        result["lead_collected"] = True
+            # ✅ Ensure lead_data includes context values
+            if not result.get("lead_data"):
+                result["lead_data"] = {}
+            if not result["lead_data"].get("name") and context.get("name"):
+                result["lead_data"]["name"] = context["name"]
+            if not result["lead_data"].get("phone") and context.get("phone"):
+                result["lead_data"]["phone"] = context["phone"]
+            if not result["lead_data"].get("email") and context.get("email"):
+                result["lead_data"]["email"] = context["email"]
+            if not result["lead_data"].get("service_interest") and context.get("service_type"):
+                result["lead_data"]["service_interest"] = context["service_type"]
             
             # Format response for language
             result["reply"] = format_response_for_language(result["reply"], language)
@@ -176,6 +217,28 @@ class AIService:
                 "booking_data": {},
                 "needs_human_handoff": True
             }
+    
+    def _build_context_summary(self, context: Dict, collected_fields: List[str]) -> str:
+        """Build a human-readable summary of what we know about the user"""
+        summary = []
+        if "name" in collected_fields and context.get("name"):
+            summary.append(f"✅ Name: {context['name']}")
+        if "phone" in collected_fields and context.get("phone"):
+            summary.append(f"✅ Phone: {context['phone']}")
+        if "email" in collected_fields and context.get("email"):
+            summary.append(f"✅ Email: {context['email']}")
+        if "service_type" in collected_fields and context.get("service_type"):
+            summary.append(f"✅ Service: {context['service_type']}")
+        if "preferred_date" in collected_fields and context.get("preferred_date"):
+            summary.append(f"✅ Date: {context['preferred_date']}")
+        if "preferred_time" in collected_fields and context.get("preferred_time"):
+            summary.append(f"✅ Time: {context['preferred_time']}")
+        if "mode" in collected_fields and context.get("mode"):
+            summary.append(f"✅ Mode: {context['mode']}")
+        
+        if not summary:
+            return "Nothing collected yet."
+        return "\n".join(summary)
     
     async def _call_gemini(self, prompt: str) -> str:
         """Call Gemini API"""
@@ -207,10 +270,7 @@ class AIService:
         """Check if lead info is collected"""
         context = conversation.get("context", {})
         collected_fields = context.get("collected_fields", [])
-        return bool(
-            "name" in collected_fields and 
-            "phone" in collected_fields
-        )
+        return "name" in collected_fields and "phone" in collected_fields
     
     def _is_booking_intent(self, message: str) -> bool:
         """Check if message indicates booking intent"""
@@ -228,7 +288,7 @@ class AIService:
             return "No previous conversation."
         
         history = []
-        for msg in messages[-10:]:  # Last 10 messages
+        for msg in messages[-10:]:
             role = "User" if msg["role"] == "user" else "Assistant"
             history.append(f"{role}: {msg['content']}")
         
