@@ -31,18 +31,24 @@ class RAGService:
         """Initialize RAG with PDF documents"""
         try:
             # Initialize embeddings
-            if settings.USE_GEMINI:
-
-                self.embeddings = GoogleGenerativeAIEmbeddings(
-        model="models/gemini-embedding-2",  # ✅ Available from your list
-        google_api_key=settings.GEMINI_API_KEY,
-        task_type="retrieval_document"
-    )
-            else:
+            if settings.USE_OPENROUTER:
+            # OpenRouter uses OpenAI-compatible API for embeddings
                 self.embeddings = OpenAIEmbeddings(
-                    api_key=settings.OPENAI_API_KEY,
-                    model="text-embedding-3-small"
-                )
+                api_key=settings.OPENROUTER_API_KEY,
+                model="text-embedding-3-small",
+                base_url="https://openrouter.ai/api/v1"
+            )
+            elif settings.USE_GEMINI:
+                self.embeddings = GoogleGenerativeAIEmbeddings(
+                model="models/gemini-embedding-2",
+                google_api_key=settings.GEMINI_API_KEY
+            )
+            else:
+            # Fallback to OpenAI
+                self.embeddings = OpenAIEmbeddings(
+                api_key=settings.OPENAI_API_KEY,
+                model="text-embedding-3-small"
+            )
             
             # Load PDFs
             documents = await self.load_documents()

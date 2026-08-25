@@ -14,22 +14,10 @@ class BookingService:
         self.sheets_service = GoogleSheetsService()
     
     async def create_from_conversation(self, chat_id: str, conversation: Dict, response: Dict) -> Optional[Booking]:
-        """Create booking from conversation"""
+    
         try:
             booking_data = response.get("booking_data", {})
             context = conversation.get("context", {})
-            
-            # Check if booking already exists
-            existing = await self.get_booking_by_chat_id(chat_id)
-            if existing and existing["booking_status"] == "pending":
-                return await self.update_booking(existing["_id"], booking_data)
-            
-            # Parse date and time
-            preferred_date = booking_data.get("date", "")
-            preferred_time = booking_data.get("time", "")
-            
-            if not preferred_date:
-                preferred_date = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
             
             # Create booking
             booking = Booking(
@@ -38,8 +26,8 @@ class BookingService:
                 whatsapp_number=context.get("phone", booking_data.get("phone", "")),
                 service_type=booking_data.get("service", context.get("service_type", "")),
                 reason=booking_data.get("reason", ""),
-                preferred_date=preferred_date,
-                preferred_time=preferred_time or "10:00 AM",
+                preferred_date=booking_data.get("date", (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")),
+                preferred_time=booking_data.get("time", "10:00 AM"),
                 mode=booking_data.get("mode", "offline"),
                 language_preference=conversation.get("language", "English"),
                 booking_status="pending",
@@ -48,79 +36,86 @@ class BookingService:
                 updated_at=datetime.utcnow().isoformat()
             )
             
-            # Save to MongoDB
+            # ✅ Save to MongoDB
             collection = await get_collection("bookings")
             result = await collection.insert_one(booking.dict())
             
-            # Sync to Google Sheets
-            if self.sheets_service.sheet:
-                await self.sheets_service.append_booking(booking.dict())
+            # ✅ ✅ ✅ CRITICAL: Save to Google Sheets
+            try:
+                self.sheets_service = GoogleSheetsService()
+                sheet_result = await self.sheets_service.append_booking(booking.dict())
+                if sheet_result:
+                    logger.info(f"✅ Booking saved to Google Sheets: {booking.customer_name}")
+                else:
+                    logger.warning(f"⚠️ Google Sheets save failed for booking: {booking.customer_name}")
+            except Exception as e:
+                logger.error(f"❌ Google Sheets error: {str(e)}")
             
-            logger.info(f"Booking created: {booking.customer_name} ({chat_id})")
+            logger.info(f"✅ Booking created: {booking.customer_name} ({chat_id})")
             return booking
             
         except Exception as e:
             logger.error(f"Error creating booking: {str(e)}")
             return None
-    
-    async def create_manual_booking(self, booking_data: BookingCreate) -> Optional[Booking]:
-        """Create booking manually"""
-        try:
-            booking = Booking(
-                chat_id=booking_data.chat_id,
-                customer_name=booking_data.customer_name,
-                whatsapp_number=booking_data.whatsapp_number,
-                service_type=booking_data.service_type,
-                reason=booking_data.reason,
-                preferred_date=booking_data.preferred_date,
-                preferred_time=booking_data.preferred_time,
-                mode=booking_data.mode,
-                language_preference=booking_data.language_preference,
-                booking_status="pending",
-                business_id=booking_data.business_id,
-                created_at=datetime.utcnow().isoformat(),
-                updated_at=datetime.utcnow().isoformat()
-            )
-            
-            collection = await get_collection("bookings")
-            await collection.insert_one(booking.dict())
-            
-            return booking
-            
-        except Exception as e:
-            logger.error(f"Error creating manual booking: {str(e)}")
-            return None
-    
-    async def get_booking_by_chat_id(self, chat_id: str) -> Optional[Dict]:
-        """Get booking by chat ID"""
-        try:
-            collection = await get_collection("bookings")
-            booking = await collection.find_one({"chat_id": chat_id})
-            return booking
-        except Exception as e:
-            logger.error(f"Error fetching booking: {str(e)}")
-            return None
-    
-    async def get_booking_by_id(self, booking_id: str) -> Optional[Dict]:
-        """Get booking by ID"""
-        try:
-            collection = await get_collection("bookings")
-            booking = await collection.find_one({"_id": ObjectId(booking_id)})
-            return booking
-        except Exception as e:
-            logger.error(f"Error fetching booking: {str(e)}")
-            return None
-    
-    async def get_all_bookings(self, skip: int = 0, limit: int = 100) -> List[Dict]:
-        """Get all bookings with pagination"""
-        try:
-            collection = await get_collection("bookings")
-            cursor = collection.find().skip(skip).limit(limit).sort("created_at", -1)
-            bookings = await cursor.to_list(length=limit)
-            return bookings
-        except Exception as e:
-            logger.error(f"Error fetching bookings: {str(e)}")
-            return []
+        
+        async def create_manual_booking(self, booking_data: BookingCreate) -> Optional[Booking]:
+            """Create booking manually"""
+            try:
+                booking = Booking(
+                    chat_id=booking_data.chat_id,
+                    customer_name=booking_data.customer_name,
+                    whatsapp_number=booking_data.whatsapp_number,
+                    service_type=booking_data.service_type,
+                    reason=booking_data.reason,
+                    preferred_date=booking_data.preferred_date,
+                    preferred_time=booking_data.preferred_time,
+                    mode=booking_data.mode,
+                    language_preference=booking_data.language_preference,
+                    booking_status="pending",
+                    business_id=booking_data.business_id,
+                    created_at=datetime.utcnow().isoformat(),
+                    updated_at=datetime.utcnow().isoformat()
+                )
+                
+                collection = await get_collection("bookings")
+                await collection.insert_one(booking.dict())
+                
+                return booking
+                
+            except Exception as e:
+                logger.error(f"Error creating manual booking: {str(e)}")
+                return None
+        
+        async def get_booking_by_chat_id(self, chat_id: str) -> Optional[Dict]:
+            """Get booking by chat ID"""
+            try:
+                collection = await get_collection("bookings")
+                booking = await collection.find_one({"chat_id": chat_id})
+                return booking
+            except Exception as e:
+                logger.error(f"Error fetching booking: {str(e)}")
+                return None
+        
+        async def get_booking_by_id(self, booking_id: str) -> Optional[Dict]:
+            """Get booking by ID"""
+            try:
+                collection = await get_collection("bookings")
+                booking = await collection.find_one({"_id": ObjectId(booking_id)})
+                return booking
+            except Exception as e:
+                logger.error(f"Error fetching booking: {str(e)}")
+                return None
+        
+        async def get_all_bookings(self, skip: int = 0, limit: int = 100) -> List[Dict]:
+            """Get all bookings with pagination"""
+            try:
+                collection = await get_collection("bookings")
+                cursor = collection.find().skip(skip).limit(limit).sort("created_at", -1)
+                bookings = await cursor.to_list(length=limit)
+                return bookings
+            except Exception as e:
+                logger.error(f"Error fetching bookings: {str(e)}")
+                return []
     
     async def update_booking(self, booking_id: str, data: Dict) -> Optional[Dict]:
         """Update booking"""

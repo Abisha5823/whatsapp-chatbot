@@ -14,24 +14,18 @@ class LeadService:
         self.sheets_service = GoogleSheetsService()
     
     async def save_lead(self, chat_id: str, conversation: Dict, response: Dict) -> Optional[Lead]:
-        """Save lead from conversation"""
+    
         try:
-            # Extract lead data from response or conversation context
             lead_data = response.get("lead_data", {})
             context = conversation.get("context", {})
             
-            # Check if lead already exists
-            existing = await self.get_lead_by_chat_id(chat_id)
-            if existing:
-                return await self.update_lead(existing["_id"], lead_data)
-            
-            # Create new lead
+            # ✅ Create lead with only lead-specific fields
             lead = Lead(
                 chat_id=chat_id,
-                name=lead_data.get("name", context.get("name", "")),
-                phone=lead_data.get("phone", context.get("phone", "")),
-                email=lead_data.get("email", context.get("email", "")),
-                service_interest=lead_data.get("service_interest", context.get("service_type", "")),
+                name=context.get("name", lead_data.get("name", "")),
+                phone=context.get("phone", lead_data.get("phone", "")),
+                email=context.get("email", lead_data.get("email", "")),
+                service_interest=context.get("service_type", lead_data.get("service_interest", "")),
                 source="whatsapp",
                 status="new",
                 business_type=context.get("business_type", "general"),
@@ -40,21 +34,28 @@ class LeadService:
                 updated_at=datetime.utcnow().isoformat()
             )
             
-            # Save to MongoDB
+            # ✅ Save to MongoDB
             collection = await get_collection("leads")
             result = await collection.insert_one(lead.dict())
             
-            # Sync to Google Sheets
-            if self.sheets_service.sheet:
-                await self.sheets_service.append_lead(lead.dict())
+            # ✅ Save to Google Sheets (only lead fields)
+            try:
+                self.sheets_service = GoogleSheetsService()
+                sheet_result = await self.sheets_service.append_lead(lead.dict())
+                if sheet_result:
+                    logger.info(f"✅ Lead saved to Google Sheets: {lead.name}")
+                else:
+                    logger.warning(f"⚠️ Google Sheets save failed for lead: {lead.name}")
+            except Exception as e:
+                logger.error(f"❌ Google Sheets error: {str(e)}")
             
-            logger.info(f"Lead saved: {lead.name} ({chat_id})")
+            logger.info(f"✅ Lead saved: {lead.name} ({chat_id})")
             return lead
-            
+        
         except Exception as e:
             logger.error(f"Error saving lead: {str(e)}")
             return None
-    
+        
     async def get_lead_by_chat_id(self, chat_id: str) -> Optional[Dict]:
         """Get lead by chat ID"""
         try:
@@ -125,3 +126,4 @@ class LeadService:
         except Exception as e:
             logger.error(f"Error syncing to Google Sheets: {str(e)}")
             return False
+    

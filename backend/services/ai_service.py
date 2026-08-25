@@ -6,6 +6,7 @@ from datetime import datetime
 import google.generativeai as genai
 from openai import AsyncOpenAI
 
+from services.openrouter_service import OpenRouterService
 from core.config import settings
 from services.rag_service import RAGService
 from prompts.system_prompt import get_system_prompt, get_booking_prompt, get_lead_collection_prompt
@@ -17,8 +18,11 @@ class AIService:
     def __init__(self):
         self.rag_service = RAGService()
         self.use_gemini = settings.USE_GEMINI
-        
-        if self.use_gemini:
+        self.use_openrouter = settings.USE_OPENROUTER
+
+        if self.use_openrouter:
+            self.openrouter = OpenRouterService()
+        elif self.use_gemini:
             genai.configure(api_key=settings.GEMINI_API_KEY)
             self.gemini_model = genai.GenerativeModel(
                 settings.GEMINI_MODEL,
@@ -45,6 +49,10 @@ class AIService:
             # Determine phase
             phase = conversation.get("phase", "greeting")
             
+            # ✅ Build lead collection status
+            lead_info = conversation.get("context", {})
+            collected_fields = lead_info.get("collected_fields", [])
+            
             # Check if lead info is collected
             lead_collected = self._is_lead_collected(conversation)
             
@@ -67,7 +75,7 @@ class AIService:
             # Build conversation history
             history = self._format_conversation_history(conversation.get("messages", []))
             
-            # Build prompt with context
+            # ✅ Build prompt with lead collection status
             prompt = f"""
             {system_prompt}
             
@@ -83,6 +91,20 @@ class AIService:
             ### Current Phase: {phase}
             ### Lead Collected: {lead_collected}
             ### Language: {language}
+            
+            ### Lead Collection Status:
+            - Name collected: {'name' in collected_fields}
+            - Phone collected: {'phone' in collected_fields}
+            - Email collected: {'email' in collected_fields}
+            - Service Interest collected: {'service_interest' in collected_fields}
+            - Current lead data: {json.dumps(lead_info)}
+            
+            **IMPORTANT RULES:**
+            1. Only ask for information you don't already have!
+            2. If name is already collected, don't ask for it again.
+            3. If phone is already collected, don't ask for it again.
+            4. If both name and phone are collected, move to answering their question.
+            5. Be natural and conversational - don't sound like a robot listing fields.
             
             Provide a response that:
             1. Answers the user's question using the context
@@ -104,7 +126,9 @@ class AIService:
             """
             
             # Generate response
-            if self.use_gemini:
+            if self.use_openrouter:
+                response = await self.openrouter.generate_response(prompt)
+            elif self.use_gemini:
                 response = await self._call_gemini(prompt)
             else:
                 response = await self._call_openai(prompt)
@@ -129,6 +153,12 @@ class AIService:
                     "booking_data": {},
                     "needs_human_handoff": False
                 }
+            
+            # ✅ If lead data was extracted, mark as collected in result
+            if result.get("lead_data"):
+                for field in ["name", "phone", "email", "service_interest"]:
+                    if result["lead_data"].get(field):
+                        result["lead_collected"] = True
             
             # Format response for language
             result["reply"] = format_response_for_language(result["reply"], language)
@@ -176,10 +206,10 @@ class AIService:
     def _is_lead_collected(self, conversation: Dict) -> bool:
         """Check if lead info is collected"""
         context = conversation.get("context", {})
+        collected_fields = context.get("collected_fields", [])
         return bool(
-            context.get("name") and 
-            context.get("phone") and
-            len(context.get("collected_fields", [])) >= 2
+            "name" in collected_fields and 
+            "phone" in collected_fields
         )
     
     def _is_booking_intent(self, message: str) -> bool:

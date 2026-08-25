@@ -7,7 +7,13 @@ class Settings(BaseSettings):
     WHATSAPP_PHONE_NUMBER_ID: str
     WHATSAPP_BUSINESS_ID: Optional[str] = None
     VERIFY_TOKEN: str
-    
+
+    USE_OPENROUTER: bool = False
+    OPENROUTER_API_KEY: Optional[str] = None
+    OPENROUTER_MODEL: str = "google/gemini-3.6-flash"
+    # OpenRouter Settings
+
+    OPENROUTER_EMBEDDING_MODEL: str = "text-embedding-3-small"  # ✅ Add this
     # AI Provider
     GEMINI_API_KEY: Optional[str] = None
     GEMINI_MODEL: str = "gemini-3.6-flash"

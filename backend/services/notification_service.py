@@ -5,12 +5,17 @@ from email.mime.multipart import MIMEMultipart
 from typing import Dict, Any
 from core.config import settings
 from services.whatsapp_service import WhatsAppService
+from models.lead import Lead  # ✅ Add this import
+from models.booking import Booking  # ✅ Add this import
 
 logger = logging.getLogger(__name__)
 
-async def send_lead_notification(lead_data: Dict[str, Any]):
+async def send_lead_notification(lead: Lead):  # ✅ Accept Lead object, not dict
     """Send lead notification to owner"""
     try:
+        # ✅ Convert Lead object to dict if needed
+        lead_data = lead.dict() if hasattr(lead, 'dict') else lead
+        
         # Send Email
         if settings.OWNER_EMAIL:
             await send_email(

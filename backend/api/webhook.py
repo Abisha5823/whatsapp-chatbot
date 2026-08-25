@@ -68,7 +68,7 @@ async def process_message(message: Dict[str, Any], metadata: Dict[str, Any]):
     """Process incoming message asynchronously"""
     try:
         chat_id = message.get("from")
-        msg_type = message.get("type")  # May be None in test payloads
+        msg_type = message.get("type")
         
         # ✅ If type is missing but text exists, assume it's a text message
         if not msg_type and message.get("text"):
@@ -90,8 +90,6 @@ async def process_message(message: Dict[str, Any], metadata: Dict[str, Any]):
             logger.warning("Empty message received")
             return
         
-        # ... rest of the function
-        
         # Get or create conversation
         conv_service = ConversationService()
         conversation = await conv_service.get_or_create(chat_id)
@@ -100,6 +98,9 @@ async def process_message(message: Dict[str, Any], metadata: Dict[str, Any]):
         from utils.helpers import detect_language
         language = detect_language(text)
         conversation["language"] = language
+        
+        # ✅ NEW: Log current context for debugging
+        logger.info(f"📝 Current context for {chat_id}: {conversation.get('context', {})}")
         
         # Check if user wants human handoff
         if any(keyword in text.lower() for keyword in ["agent", "human", "person", "speak", "talk to"]):
@@ -112,6 +113,50 @@ async def process_message(message: Dict[str, Any], metadata: Dict[str, Any]):
             message=text,
             conversation=conversation
         )
+        
+        # ✅ NEW: Extract and save lead data from response
+        # ✅ FIXED: Extract and save lead data from response with proper merging
+        lead_data = response.get("lead_data", {})
+        context = conversation.get("context", {})
+
+    # Ensure collected_fields exists
+        if "collected_fields" not in context:
+            context["collected_fields"] = []
+
+    # Save lead data to context (preserving existing data)
+        if lead_data:
+        # Update context with new lead data (don't overwrite existing)
+            if lead_data.get("name"):
+                context["name"] = lead_data["name"]
+                if "name" not in context["collected_fields"]:
+                    context["collected_fields"].append("name")
+            if lead_data.get("phone"):
+                context["phone"] = lead_data["phone"]
+                if "phone" not in context["collected_fields"]:
+                    context["collected_fields"].append("phone")
+            if lead_data.get("email"):
+                context["email"] = lead_data["email"]
+                if "email" not in context["collected_fields"]:
+                    context["collected_fields"].append("email")
+            if lead_data.get("service_interest"):
+                context["service_type"] = lead_data["service_interest"]
+                if "service_interest" not in context["collected_fields"]:
+                    context["collected_fields"].append("service_interest")
+
+    # ✅ CRITICAL: Also check for lead data directly from AI response
+    # Sometimes the AI puts lead data directly in the response
+        if response.get("lead_collected") and not lead_data:
+        # Try to extract from the reply text
+            reply = response.get("reply", "")
+        # Simple extraction for testing
+            import re
+            name_match = re.search(r"(?:name is |I am |I'm )(\w+)", reply.lower())
+            if name_match and not context.get("name"):
+                context["name"] = name_match.group(1).capitalize()
+                if "name" not in context["collected_fields"]:
+                    context["collected_fields"].append("name")
+
+        logger.info(f"📝 Merged context for {chat_id}: {context}")
         
         # Check for booking intent
         if "booking" in response.get("intent", "").lower():
@@ -139,25 +184,31 @@ async def process_message(message: Dict[str, Any], metadata: Dict[str, Any]):
         whatsapp = WhatsAppService()
         await whatsapp.send_message(chat_id, response["reply"])
         
-        # Update conversation
+        # ✅ UPDATED: Update conversation with proper context
         await conv_service.update(chat_id, {
             "messages": conversation.get("messages", []) + [
                 {"role": "user", "content": text, "timestamp": datetime.utcnow().isoformat()},
                 {"role": "assistant", "content": response["reply"], "timestamp": datetime.utcnow().isoformat()}
             ],
-            "context": conversation.get("context", {}),
+            "context": context,  # ✅ Save updated context
             "phase": response.get("phase", "lead_collection"),
             "updated_at": datetime.utcnow().isoformat()
         })
         
+        # ✅ NEW: Log what was saved
+        logger.info(f"💾 Updated context for {chat_id}: {context}")
+        
     except Exception as e:
         logger.error(f"Message processing error: {str(e)}")
         # Send fallback message
-        whatsapp = WhatsAppService()
-        await whatsapp.send_message(
-            chat_id, 
-            "Sorry, I'm having trouble processing your request. Please try again or contact our support."
-        )
+        try:
+            whatsapp = WhatsAppService()
+            await whatsapp.send_message(
+                chat_id, 
+                "Sorry, I'm having trouble processing your request. Please try again or contact our support."
+            )
+        except:
+            pass
 
 async def handle_human_handoff(chat_id: str, conversation: Dict):
     """Handle human handoff request"""
