@@ -5,6 +5,8 @@ import logging
 import json
 from datetime import datetime
 from core.config import settings
+import gspread
+from google.oauth2.service_account import Credentials
 
 logger = logging.getLogger(__name__)
 
@@ -15,6 +17,39 @@ class GoogleSheetsService:
         self.lead_sheet = None
         self.booking_sheet = None
         self.initialize()
+
+
+
+    def setup_sheets():
+        scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
+        creds = Credentials.from_service_account_file('credentials.json', scopes=scope)
+        client = gspread.authorize(creds)
+        
+        # Create or open spreadsheet
+        spreadsheet = client.open("WhatsApp Chatbot Data")
+        
+        # Setup Leads sheet
+        try:
+            leads_sheet = spreadsheet.worksheet("Leads")
+        except:
+            leads_sheet = spreadsheet.add_worksheet(title="Leads", rows=1000, cols=10)
+            leads_headers = ["created_at", "chat_id", "customer_name", "phone", "email", 
+                            "service_interest", "source", "status", "business_type", "conversation_summary"]
+            leads_sheet.append_row(leads_headers)
+        
+        # Setup Bookings sheet
+        try:
+            bookings_sheet = spreadsheet.worksheet("Bookings")
+        except:
+            bookings_sheet = spreadsheet.add_worksheet(title="Bookings", rows=1000, cols=14)
+            bookings_headers = ["created_at", "chat_id", "customer_name", "whatsapp_number", "email",
+                            "service_type", "reason", "preferred_date", "preferred_time", "mode",
+                            "language_preference", "booking_status", "business_id", "updated_at"]
+            bookings_sheet.append_row(bookings_headers)
+        
+        print("✅ Sheets created successfully!")
+
+    setup_sheets()
     
     def initialize(self):
         """Initialize Google Sheets connection"""
@@ -90,9 +125,7 @@ class GoogleSheetsService:
                     cols=12
                 )
                 # Add headers
-                headers = ["created_at", "chat_id", "customer_name", "phone", "service_type", 
-                          "reason", "preferred_date", "preferred_time", "mode", "language_preference", 
-                          "booking_status", "updated_at"]
+                headers = ["created_at", "chat_id", "customer_name", "whatsapp_number", "email", "service_type", "reason", "preferred_date", "preferred_time", "mode", "language_preference", "booking_status", "business_id", "updated_at"]
                 self.booking_sheet.append_row(headers)
                 logger.info("✅ Bookings worksheet created with headers")
             
@@ -147,19 +180,21 @@ class GoogleSheetsService:
                 created_at = datetime.now().isoformat()
             
             row = [
-                created_at,
-                booking_data.get("chat_id", ""),
-                booking_data.get("customer_name", ""),
-                booking_data.get("whatsapp_number", ""),
-                booking_data.get("service_type", ""),
-                booking_data.get("reason", ""),
-                booking_data.get("preferred_date", ""),
-                booking_data.get("preferred_time", ""),
-                booking_data.get("mode", ""),
-                booking_data.get("language_preference", ""),
-                booking_data.get("booking_status", "pending"),
-                booking_data.get("updated_at", "")
-            ]
+                    booking_data.get("created_at", datetime.now().isoformat()),  # Column A
+                    booking_data.get("chat_id", ""),                              # Column B
+                    booking_data.get("customer_name", ""),                        # Column C
+                    booking_data.get("whatsapp_number", ""),                      # Column D
+                    booking_data.get("email", ""),                                # Column E
+                    booking_data.get("service_type", ""),                         # Column F
+                    booking_data.get("reason", ""),                               # Column G
+                    booking_data.get("preferred_date", ""),                       # Column H
+                    booking_data.get("preferred_time", ""),                       # Column I
+                    booking_data.get("mode", ""),                                 # Column J
+                    booking_data.get("language_preference", "en"),                # Column K
+                    booking_data.get("booking_status", "pending"),                # Column L
+                    booking_data.get("business_id", ""),                          # Column M
+                    booking_data.get("updated_at", "")                            # Column N
+                ]
             
             self.booking_sheet.append_row(row)
             logger.info(f"✅ Booking appended to Google Sheets: {booking_data.get('customer_name')}")

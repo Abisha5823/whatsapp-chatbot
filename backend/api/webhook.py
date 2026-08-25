@@ -73,11 +73,6 @@ async def process_message(message: Dict[str, Any], metadata: Dict[str, Any]):
         
         if msg_type == "text":
             text = message.get("text", {}).get("body", "")
-        elif msg_type == "voice":
-            voice_service = VoiceService()
-            text = await voice_service.transcribe_voice(message)
-        elif msg_type == "interactive":
-            text = message.get("interactive", {}).get("button_reply", {}).get("title", "")
         else:
             logger.warning(f"Unsupported message type: {msg_type}")
             return
@@ -97,106 +92,123 @@ async def process_message(message: Dict[str, Any], metadata: Dict[str, Any]):
         if "collected_fields" not in context:
             context["collected_fields"] = []
         
-        # ✅ ✅ ✅ EXTRACT FRESH DATA FROM USER MESSAGE (OVERRIDE OLD DATA)
+        # ✅ CHECK IF THIS IS A CONFIRMATION MESSAGE FIRST
+        is_confirmation = any(word in text.lower() for word in ["yes", "confirm", "ok", "sure", "confirm pannalama", "go ahead", "yeah", "yep"])
         
-        # Extract Name - OVERRIDE old name
-        name_extracted = False
-        name_patterns = [
-            r"(?:my name is |i am |i'm |name is |this is )([A-Za-z\s]+)",
-            r"^([A-Za-z\s]{2,30})$"  # Just a name
-        ]
-        for pattern in name_patterns:
-            name_match = re.search(pattern, text, re.IGNORECASE)
-            if name_match:
-                name = name_match.group(1).strip().title()
+        # ✅ ONLY extract data if NOT a confirmation message
+        if not is_confirmation:
+            # Extract Name (only if not confirmation)
+            name_extracted = False
+            name_patterns = [
+                r"(?:my name is |i am |i'm |name is |this is )([A-Za-z\s]+)",
+                r"^([A-Za-z\s]{2,30})$"
+            ]
+            for pattern in name_patterns:
+                name_match = re.search(pattern, text, re.IGNORECASE)
+                if name_match:
+                    name = name_match.group(1).strip().title()
+                    if len(name) > 1 and len(name) < 30:
+                        context["name"] = name
+                        if "name" not in context["collected_fields"]:
+                            context["collected_fields"].append("name")
+                        logger.info(f"👤 Extracted name: {context['name']}")
+                        name_extracted = True
+                        break
+            
+            # If no name pattern found but message is short, treat as name
+            if not name_extracted and len(text.strip()) < 20 and not any(c in text for c in ['@', '.', 'am', 'pm', 'offline', 'online']):
+                name = text.strip().title()
                 if len(name) > 1 and len(name) < 30:
                     context["name"] = name
                     if "name" not in context["collected_fields"]:
                         context["collected_fields"].append("name")
-                    logger.info(f"👤 Extracted/Updated name: {context['name']}")
-                    name_extracted = True
-                    break
-        
-        # If no name pattern found but message is short, treat as name
-        if not name_extracted and len(text.strip()) < 20 and not any(c in text for c in ['@', '.', 'am', 'pm']):
-            name = text.strip().title()
-            if len(name) > 1 and len(name) < 30:
-                context["name"] = name
-                if "name" not in context["collected_fields"]:
-                    context["collected_fields"].append("name")
-                logger.info(f"👤 Extracted name from short message: {context['name']}")
-        
-        # Extract Phone - OVERRIDE old phone
-        phone_match = re.search(r'(\+?91)?[6-9]\d{9}', text)
-        if phone_match:
-            phone = phone_match.group(0)
-            if not phone.startswith('+'):
-                phone = '+91' + phone if len(phone) == 10 else phone
-            context["phone"] = phone
-            if "phone" not in context["collected_fields"]:
-                context["collected_fields"].append("phone")
-            logger.info(f"📱 Extracted/Updated phone: {context['phone']}")
-        
-        # Extract Email - OVERRIDE old email
-        email_match = re.search(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}', text)
-        if email_match:
-            context["email"] = email_match.group(0).lower()
-            if "email" not in context["collected_fields"]:
-                context["collected_fields"].append("email")
-            logger.info(f"📧 Extracted/Updated email: {context['email']}")
-        
-        # Extract Date (YYYY-MM-DD) - OVERRIDE old date
-        date_match = re.search(r'(\d{4}-\d{2}-\d{2})', text)
-        if date_match:
-            context["preferred_date"] = date_match.group(0)
-            if "preferred_date" not in context["collected_fields"]:
-                context["collected_fields"].append("preferred_date")
-            logger.info(f"📅 Extracted/Updated date: {context['preferred_date']}")
-        
-        # Extract Date (DD/MM/YYYY)
-        date_match2 = re.search(r'(\d{2}/\d{2}/\d{4})', text)
-        if date_match2:
-            context["preferred_date"] = date_match2.group(0)
-            if "preferred_date" not in context["collected_fields"]:
-                context["collected_fields"].append("preferred_date")
-            logger.info(f"📅 Extracted/Updated date: {context['preferred_date']}")
-        
-        # Extract Time (HH:MM AM/PM) - OVERRIDE old time
-        time_match = re.search(r'(\d{1,2}:\d{2}\s*(?:AM|PM|am|pm))', text)
-        if time_match:
-            context["preferred_time"] = time_match.group(0)
-            if "preferred_time" not in context["collected_fields"]:
-                context["collected_fields"].append("preferred_time")
-            logger.info(f"🕐 Extracted/Updated time: {context['preferred_time']}")
-        
-        # Extract Time (e.g., "9am")
-        time_match2 = re.search(r'(\d{1,2})\s*(?:AM|PM|am|pm)', text)
-        if time_match2:
-            time_str = time_match2.group(0)
-            if ':' not in time_str:
-                if 'AM' in time_str:
-                    time_str = time_str.replace('AM', ':00 AM')
-                elif 'PM' in time_str:
-                    time_str = time_str.replace('PM', ':00 PM')
-            context["preferred_time"] = time_str
-            if "preferred_time" not in context["collected_fields"]:
-                context["collected_fields"].append("preferred_time")
-            logger.info(f"🕐 Extracted/Updated time: {context['preferred_time']}")
-        
-        # Extract Mode - OVERRIDE old mode
-        if "offline" in text.lower():
-            context["mode"] = "offline"
-            if "mode" not in context["collected_fields"]:
-                context["collected_fields"].append("mode")
-            logger.info(f"📍 Extracted/Updated mode: offline")
-        elif "online" in text.lower():
-            context["mode"] = "online"
-            if "mode" not in context["collected_fields"]:
-                context["collected_fields"].append("mode")
-            logger.info(f"📍 Extracted/Updated mode: online")
-        
-        # ✅ Check if user confirmed booking
-        is_confirmation = any(word in text.lower() for word in ["yes", "confirm", "ok", "sure", "confirm pannalama", "go ahead", "yeah", "yep"])
+                    logger.info(f"👤 Extracted name from short message: {context['name']}")
+            
+            # Extract Phone
+            phone_match = re.search(r'(\+?91)?[6-9]\d{9}', text)
+            if phone_match:
+                phone = phone_match.group(0)
+                if not phone.startswith('+'):
+                    phone = '+91' + phone if len(phone) == 10 else phone
+                context["phone"] = phone
+                if "phone" not in context["collected_fields"]:
+                    context["collected_fields"].append("phone")
+                logger.info(f"📱 Extracted phone: {context['phone']}")
+            
+            # Extract Email
+            email_match = re.search(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}', text)
+            if email_match:
+                context["email"] = email_match.group(0).lower()
+                if "email" not in context["collected_fields"]:
+                    context["collected_fields"].append("email")
+                logger.info(f"📧 Extracted email: {context['email']}")
+            
+            # Extract Date (YYYY-MM-DD)
+            date_match = re.search(r'(\d{4}-\d{2}-\d{2})', text)
+            if date_match:
+                context["preferred_date"] = date_match.group(0)
+                if "preferred_date" not in context["collected_fields"]:
+                    context["collected_fields"].append("preferred_date")
+                logger.info(f"📅 Extracted date: {context['preferred_date']}")
+            
+            # Extract Date (DD/MM/YYYY)
+            date_match2 = re.search(r'(\d{2}/\d{2}/\d{4})', text)
+            if date_match2:
+                context["preferred_date"] = date_match2.group(0)
+                if "preferred_date" not in context["collected_fields"]:
+                    context["collected_fields"].append("preferred_date")
+                logger.info(f"📅 Extracted date: {context['preferred_date']}")
+            
+            # ✅ Extract Time - FIXED
+            time_extracted = False
+            
+            # Try HH:MM AM/PM format
+            time_match = re.search(r'(\d{1,2}:\d{2})\s*(?:AM|PM|am|pm)', text)
+            if time_match:
+                time_str = time_match.group(0)
+                context["preferred_time"] = time_str
+                if "preferred_time" not in context["collected_fields"]:
+                    context["collected_fields"].append("preferred_time")
+                logger.info(f"🕐 Extracted time: {context['preferred_time']}")
+                time_extracted = True
+            
+            # Try "9am" or "9 AM" format
+            if not time_extracted:
+                time_match2 = re.search(r'(\d{1,2})\s*(?:AM|PM|am|pm)', text)
+                if time_match2:
+                    hour = time_match2.group(1)
+                    ampm = time_match2.group(2).upper()
+                    time_str = f"{hour}:00 {ampm}"
+                    context["preferred_time"] = time_str
+                    if "preferred_time" not in context["collected_fields"]:
+                        context["collected_fields"].append("preferred_time")
+                    logger.info(f"🕐 Extracted time: {context['preferred_time']}")
+                    time_extracted = True
+            
+            # Try "9" alone (assume AM)
+            if not time_extracted:
+                time_match3 = re.search(r'(\d{1,2})\s*(?![am|pm])', text)
+                if time_match3 and len(text) < 50:
+                    hour = time_match3.group(1)
+                    if 1 <= int(hour) <= 12:
+                        time_str = f"{hour}:00 AM"
+                        context["preferred_time"] = time_str
+                        if "preferred_time" not in context["collected_fields"]:
+                            context["collected_fields"].append("preferred_time")
+                        logger.info(f"🕐 Extracted time (default AM): {context['preferred_time']}")
+                        time_extracted = True
+            
+            # Extract Mode
+            if "offline" in text.lower():
+                context["mode"] = "offline"
+                if "mode" not in context["collected_fields"]:
+                    context["collected_fields"].append("mode")
+                logger.info(f"📍 Extracted mode: offline")
+            elif "online" in text.lower():
+                context["mode"] = "online"
+                if "mode" not in context["collected_fields"]:
+                    context["collected_fields"].append("mode")
+                logger.info(f"📍 Extracted mode: online")
         
         # ✅ Update conversation
         conversation["context"] = context
@@ -234,7 +246,7 @@ async def process_message(message: Dict[str, Any], metadata: Dict[str, Any]):
                 "mode": context.get("mode", "offline"),
                 "language_preference": language,
                 "booking_status": "confirmed",
-                "email": context.get("email", "")  # ✅ Include email
+                "email": context.get("email", "")
             }
             
             booking = await booking_service.create_manual_booking(booking_data)
