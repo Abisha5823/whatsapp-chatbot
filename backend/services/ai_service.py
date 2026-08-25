@@ -51,11 +51,9 @@ class AIService:
             language = detect_language(message)
             conversation["language"] = language
             
-            # ✅ Get RAG context with better retrieval
             # ✅ Get RAG context with better error handling
             rag_context = ""
             try:
-                # Check if vectorstore exists, if not, initialize it
                 if self.rag_service and not self.rag_service.vectorstore:
                     logger.info("🔄 Vectorstore not initialized, initializing now...")
                     await self.rag_service.initialize()
@@ -99,18 +97,46 @@ class AIService:
                 collected_fields.append("email")
                 logger.info(f"📧 Extracted email: {context['email']}")
 
-            # ✅ Extract date/time from message
+            # ✅ Extract date (YYYY-MM-DD format)
+            date_match = re.search(r'(\d{4}-\d{2}-\d{2})', message)
+            if date_match and "preferred_date" not in collected_fields:
+                context["preferred_date"] = date_match.group(0)
+                collected_fields.append("preferred_date")
+                logger.info(f"📅 Extracted date: {context['preferred_date']}")
+
+            # ✅ Extract date (DD/MM/YYYY format)
+            date_match2 = re.search(r'(\d{2}/\d{2}/\d{4})', message)
+            if date_match2 and "preferred_date" not in collected_fields:
+                context["preferred_date"] = date_match2.group(0)
+                collected_fields.append("preferred_date")
+                logger.info(f"📅 Extracted date: {context['preferred_date']}")
+
+            # ✅ Extract date from keywords
             date_keywords = ["tomorrow", "today", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
             for keyword in date_keywords:
                 if keyword in message.lower() and "preferred_date" not in collected_fields:
                     context["preferred_date"] = keyword
                     collected_fields.append("preferred_date")
+                    logger.info(f"📅 Extracted date: {context['preferred_date']}")
                     break
             
-            # ✅ Extract time from message
-            time_match = re.search(r'(\d{1,2})\s*(?:am|pm|:|o\'clock)', message.lower())
+            # ✅ Extract time (HH:MM AM/PM format)
+            time_match = re.search(r'(\d{1,2}:\d{2}\s*(?:AM|PM|am|pm))', message)
             if time_match and "preferred_time" not in collected_fields:
-                time_str = time_match.group(0)
+                context["preferred_time"] = time_match.group(0)
+                collected_fields.append("preferred_time")
+                logger.info(f"🕐 Extracted time: {context['preferred_time']}")
+
+            # ✅ Extract time (e.g., "11am", "11 AM")
+            time_match2 = re.search(r'(\d{1,2})\s*(?:AM|PM|am|pm)', message)
+            if time_match2 and "preferred_time" not in collected_fields:
+                time_str = time_match2.group(0)
+                if ':' not in time_str:
+                    # Add :00 if just hour
+                    if 'AM' in time_str:
+                        time_str = time_str.replace('AM', ':00 AM')
+                    elif 'PM' in time_str:
+                        time_str = time_str.replace('PM', ':00 PM')
                 context["preferred_time"] = time_str
                 collected_fields.append("preferred_time")
                 logger.info(f"🕐 Extracted time: {context['preferred_time']}")
@@ -119,9 +145,11 @@ class AIService:
             if "offline" in message.lower() and "mode" not in collected_fields:
                 context["mode"] = "offline"
                 collected_fields.append("mode")
+                logger.info(f"📍 Extracted mode: offline")
             elif "online" in message.lower() and "mode" not in collected_fields:
                 context["mode"] = "online"
                 collected_fields.append("mode")
+                logger.info(f"📍 Extracted mode: online")
 
             # ✅ Update context with extracted data
             conversation["context"] = context
@@ -129,8 +157,16 @@ class AIService:
             # Check if lead info is collected (name + phone)
             lead_collected = "name" in collected_fields and "phone" in collected_fields
             
+            # ✅ Check if booking is complete
+            booking_complete = (
+                "preferred_date" in collected_fields and
+                "preferred_time" in collected_fields and
+                "mode" in collected_fields
+            )
+            
             # Build system prompt
-            if "booking" in collected_fields or self._is_booking_intent(message):
+            is_booking_intent = self._is_booking_intent(message) or booking_complete
+            if is_booking_intent:
                 system_prompt = get_booking_prompt(settings.BUSINESS_NAME, settings.ASSISTANT_NAME)
                 phase = "booking"
             elif not lead_collected:
@@ -167,7 +203,24 @@ class AIService:
 
             context_summary_text = "\n".join(context_summary) if context_summary else "No information collected yet."
 
-            # ✅ Build prompt with FORCED RAG instructions
+            # ✅ Build booking status
+            booking_status = []
+            if "preferred_date" in collected_fields:
+                booking_status.append(f"✅ Date: {context['preferred_date']}")
+            else:
+                booking_status.append("❌ Date: Not provided yet")
+            if "preferred_time" in collected_fields:
+                booking_status.append(f"✅ Time: {context['preferred_time']}")
+            else:
+                booking_status.append("❌ Time: Not provided yet")
+            if "mode" in collected_fields:
+                booking_status.append(f"✅ Mode: {context['mode']}")
+            else:
+                booking_status.append("❌ Mode: Not provided yet")
+
+            booking_status_text = "\n".join(booking_status)
+
+            # ✅ Build prompt with FORCED RAG and booking instructions
             prompt = f"""
 {system_prompt}
 
@@ -193,6 +246,17 @@ class AIService:
 ### ✅ WHAT I ALREADY KNOW ABOUT THIS USER (DO NOT ASK FOR THESE):
 {context_summary_text}
 
+### 📅 BOOKING STATUS:
+{booking_status_text}
+
+### 🚨 STRICT RULES FOR BOOKING:
+1. **If you see a date in "BOOKING STATUS", DO NOT ask for date again.**
+2. **If you see a time in "BOOKING STATUS", DO NOT ask for time again.**
+3. **If you see a mode in "BOOKING STATUS", DO NOT ask for mode again.**
+4. **If you see an email in "WHAT I ALREADY KNOW", DO NOT ask for email again.**
+5. **If ALL booking data is collected, confirm the booking and stop asking questions.**
+6. **If the user says they already provided information, apologize and use what you have.**
+
 ### Lead Collection Status:
 - Name collected: {'name' in collected_fields}
 - Phone collected: {'phone' in collected_fields}
@@ -208,6 +272,7 @@ class AIService:
 3. If the user asks about pricing, use the EXACT prices from the PDF.
 4. Be warm and conversational.
 5. Adapt to the language ({language}).
+6. **If all booking details are collected, confirm the booking and say "Your booking is confirmed!"**
 
 Return your response as JSON:
 {{
