@@ -11,6 +11,7 @@ logger = logging.getLogger(__name__)
 class ConversationService:
     def __init__(self):
         self.collection_name = "conversations"
+        self.MAX_MESSAGES = 50  # ✅ Limit to 50 messages
     
     async def get_or_create(self, chat_id: str) -> Dict[str, Any]:
         """Get existing conversation or create new one"""
@@ -19,16 +20,20 @@ class ConversationService:
             conversation = await collection.find_one({"chat_id": chat_id})
             
             if conversation:
+                # ✅ Trim messages if too many
+                if len(conversation.get("messages", [])) > self.MAX_MESSAGES:
+                    conversation["messages"] = conversation["messages"][-self.MAX_MESSAGES:]
+                    await collection.update_one(
+                        {"chat_id": chat_id},
+                        {"$set": {"messages": conversation["messages"]}}
+                    )
                 return conversation
             
-            # Create new conversation
             new_conversation = {
                 "chat_id": chat_id,
                 "messages": [],
                 "language": "en",
-                "context": {
-                    "collected_fields": []
-                },
+                "context": {"collected_fields": []},
                 "phase": "greeting",
                 "created_at": datetime.utcnow().isoformat(),
                 "updated_at": datetime.utcnow().isoformat()
@@ -42,55 +47,54 @@ class ConversationService:
             return {"chat_id": chat_id, "messages": [], "context": {"collected_fields": []}, "phase": "greeting"}
     
     async def update(self, chat_id: str, data: Dict) -> bool:
-        """Update conversation - MERGE context instead of replacing"""
+        """Update conversation with size limit"""
         try:
             collection = await get_collection(self.collection_name)
-            
-            # ✅ Get existing conversation to merge context
             existing = await collection.find_one({"chat_id": chat_id})
             
-            # Set updated_at timestamp
+            if not existing:
+                logger.warning(f"Conversation {chat_id} not found")
+                return False
+            
             data["updated_at"] = datetime.utcnow().isoformat()
             
-            # ✅ MERGE context (don't overwrite)
-            if existing and "context" in data:
+            # ✅ Merge context
+            if "context" in data:
                 existing_context = existing.get("context", {"collected_fields": []})
                 new_context = data.get("context", {})
                 
-                # Ensure collected_fields exists
                 if "collected_fields" not in existing_context:
                     existing_context["collected_fields"] = []
                 if "collected_fields" not in new_context:
                     new_context["collected_fields"] = []
                 
-                # ✅ Merge: combine existing and new fields
                 merged_context = {**existing_context, **new_context}
                 
-                # ✅ Merge collected_fields (deduplicate)
                 existing_fields = set(existing_context.get("collected_fields", []))
                 new_fields = set(new_context.get("collected_fields", []))
-                merged_fields = list(existing_fields | new_fields)  # Union of both sets
+                merged_fields = list(existing_fields | new_fields)
                 merged_context["collected_fields"] = merged_fields
                 
                 data["context"] = merged_context
-                
-                logger.info(f"🔄 Merged context for {chat_id}: {merged_context}")
             
-            # ✅ Also merge messages (append, don't replace)
-            if existing and "messages" in data:
+            # ✅ Limit messages
+            if "messages" in data:
                 existing_messages = existing.get("messages", [])
                 new_messages = data.get("messages", [])
                 if new_messages:
-                    # Append new messages to existing ones
-                    data["messages"] = existing_messages + new_messages
+                    combined = existing_messages + new_messages
+                    data["messages"] = combined[-self.MAX_MESSAGES:]
+                    logger.info(f"📝 Messages limited to last {self.MAX_MESSAGES} (total: {len(combined)})")
+            else:
+                # ✅ Even if messages not in update, ensure existing is limited
+                if len(existing.get("messages", [])) > self.MAX_MESSAGES:
+                    data["messages"] = existing["messages"][-self.MAX_MESSAGES:]
             
-            # Update the document
             result = await collection.update_one(
                 {"chat_id": chat_id},
                 {"$set": data}
             )
             
-            logger.info(f"💾 Updated conversation for {chat_id}: {result.modified_count} field(s) modified")
             return result.modified_count > 0
             
         except Exception as e:
@@ -103,13 +107,12 @@ class ConversationService:
             collection = await get_collection(self.collection_name)
             conversation = await collection.find_one({"chat_id": chat_id})
             return conversation
-            
         except Exception as e:
             logger.error(f"Error fetching conversation: {str(e)}")
             return None
     
     async def add_message(self, chat_id: str, role: str, content: str) -> bool:
-        """Add a message to conversation"""
+        """Add a message with size limit"""
         try:
             collection = await get_collection(self.collection_name)
             message = {
@@ -118,6 +121,7 @@ class ConversationService:
                 "timestamp": datetime.utcnow().isoformat()
             }
             
+            # ✅ Push and then limit
             result = await collection.update_one(
                 {"chat_id": chat_id},
                 {
@@ -125,6 +129,16 @@ class ConversationService:
                     "$set": {"updated_at": datetime.utcnow().isoformat()}
                 }
             )
+            
+            # ✅ Limit messages after adding
+            conversation = await collection.find_one({"chat_id": chat_id})
+            if conversation and len(conversation.get("messages", [])) > self.MAX_MESSAGES:
+                conversation["messages"] = conversation["messages"][-self.MAX_MESSAGES:]
+                await collection.update_one(
+                    {"chat_id": chat_id},
+                    {"$set": {"messages": conversation["messages"]}}
+                )
+            
             return result.modified_count > 0
             
         except Exception as e:
@@ -132,38 +146,24 @@ class ConversationService:
             return False
     
     async def update_context(self, chat_id: str, context_data: Dict) -> bool:
-        """Update conversation context - MERGE with existing"""
+        """Update conversation context"""
         try:
             collection = await get_collection(self.collection_name)
-            
-            # ✅ Get existing to merge
             existing = await collection.find_one({"chat_id": chat_id})
             if existing:
                 existing_context = existing.get("context", {"collected_fields": []})
-                
-                # Merge context
                 merged_context = {**existing_context, **context_data}
                 
-                # Merge collected_fields
                 existing_fields = set(existing_context.get("collected_fields", []))
                 new_fields = set(context_data.get("collected_fields", []))
-                merged_fields = list(existing_fields | new_fields)
-                merged_context["collected_fields"] = merged_fields
+                merged_context["collected_fields"] = list(existing_fields | new_fields)
                 
                 result = await collection.update_one(
                     {"chat_id": chat_id},
-                    {
-                        "$set": {
-                            "context": merged_context,
-                            "updated_at": datetime.utcnow().isoformat()
-                        }
-                    }
+                    {"$set": {"context": merged_context, "updated_at": datetime.utcnow().isoformat()}}
                 )
-                logger.info(f"📝 Updated context for {chat_id}: {merged_context}")
                 return result.modified_count > 0
-            
             return False
-            
         except Exception as e:
             logger.error(f"Error updating context: {str(e)}")
             return False
@@ -174,33 +174,22 @@ class ConversationService:
             collection = await get_collection(self.collection_name)
             result = await collection.update_one(
                 {"chat_id": chat_id},
-                {
-                    "$set": {
-                        "phase": phase,
-                        "updated_at": datetime.utcnow().isoformat()
-                    }
-                }
+                {"$set": {"phase": phase, "updated_at": datetime.utcnow().isoformat()}}
             )
             return result.modified_count > 0
-            
         except Exception as e:
             logger.error(f"Error updating phase: {str(e)}")
             return False
     
-    async def clear_context(self, chat_id: str) -> bool:
-        """Clear conversation context (for testing)"""
+    async def clear_conversation(self, chat_id: str) -> bool:
+        """Clear all messages for a chat"""
         try:
             collection = await get_collection(self.collection_name)
             result = await collection.update_one(
                 {"chat_id": chat_id},
-                {
-                    "$set": {
-                        "context": {"collected_fields": []},
-                        "updated_at": datetime.utcnow().isoformat()
-                    }
-                }
+                {"$set": {"messages": [], "updated_at": datetime.utcnow().isoformat()}}
             )
             return result.modified_count > 0
         except Exception as e:
-            logger.error(f"Error clearing context: {str(e)}")
+            logger.error(f"Error clearing conversation: {str(e)}")
             return False
