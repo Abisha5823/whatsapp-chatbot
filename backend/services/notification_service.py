@@ -46,38 +46,43 @@ async def send_lead_notification(lead: Lead):  # ✅ Accept Lead object, not dic
     except Exception as e:
         logger.error(f"Error sending lead notification: {str(e)}")
 
-async def send_booking_notification(booking_data: Dict[str, Any]):
+async def send_booking_notification(booking):
     """Send booking notification to owner"""
     try:
-        message = f"""
-        📅 New Booking Confirmed!
+        # ✅ Convert booking to dict
+        booking_data = booking.dict() if hasattr(booking, 'dict') else booking
         
-        Customer: {booking_data.get('customer_name')}
-        Phone: {booking_data.get('whatsapp_number')}
-        Service: {booking_data.get('service_type')}
-        Date: {booking_data.get('preferred_date')}
-        Time: {booking_data.get('preferred_time')}
-        Mode: {booking_data.get('mode')}
-        Reason: {booking_data.get('reason', 'Not specified')}
-        """
+        message = f"""
+📅 New Booking Confirmed!
+
+Customer: {booking_data.get('customer_name', 'Unknown')}
+Phone: {booking_data.get('whatsapp_number', 'Unknown')}
+Email: {booking_data.get('email', 'Not provided')}
+Service: {booking_data.get('service_type', 'solar installation')}
+Date: {booking_data.get('preferred_date', 'Not specified')}
+Time: {booking_data.get('preferred_time', 'Not specified')}
+Mode: {booking_data.get('mode', 'Not specified')}
+Status: {booking_data.get('booking_status', 'confirmed')}
+"""
         
         # Send Email
         if settings.OWNER_EMAIL:
             await send_email(
                 to=settings.OWNER_EMAIL,
-                subject=f"📅 New Booking: {booking_data.get('customer_name')}",
+                subject=f"📅 New Booking: {booking_data.get('customer_name', 'Unknown')}",
                 body=message
             )
+            logger.info(f"✅ Booking email sent to {settings.OWNER_EMAIL}")
         
-        # Send WhatsApp
+        # Send WhatsApp (optional)
         if settings.OWNER_PHONE:
             whatsapp = WhatsAppService()
-            await whatsapp.send_message(settings.OWNER_PHONE, message[:4096])  # WhatsApp limit
+            await whatsapp.send_message(settings.OWNER_PHONE, message[:4096])
         
-        logger.info(f"Booking notification sent for {booking_data.get('customer_name')}")
+        logger.info(f"✅ Booking notification sent for {booking_data.get('customer_name')}")
         
     except Exception as e:
-        logger.error(f"Error sending booking notification: {str(e)}")
+        logger.error(f"❌ Error sending booking notification: {str(e)}")
 
 async def send_handoff_notification(chat_id: str, conversation: Dict):
     """Send human handoff notification to owner"""
