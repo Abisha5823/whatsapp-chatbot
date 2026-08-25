@@ -20,36 +20,7 @@ class GoogleSheetsService:
 
 
 
-    def setup_sheets():
-        scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
-        creds = Credentials.from_service_account_file('credentials.json', scopes=scope)
-        client = gspread.authorize(creds)
-        
-        # Create or open spreadsheet
-        spreadsheet = client.open("WhatsApp Chatbot Data")
-        
-        # Setup Leads sheet
-        try:
-            leads_sheet = spreadsheet.worksheet("Leads")
-        except:
-            leads_sheet = spreadsheet.add_worksheet(title="Leads", rows=1000, cols=10)
-            leads_headers = ["created_at", "chat_id", "customer_name", "phone", "email", 
-                            "service_interest", "source", "status", "business_type", "conversation_summary"]
-            leads_sheet.append_row(leads_headers)
-        
-        # Setup Bookings sheet
-        try:
-            bookings_sheet = spreadsheet.worksheet("Bookings")
-        except:
-            bookings_sheet = spreadsheet.add_worksheet(title="Bookings", rows=1000, cols=14)
-            bookings_headers = ["created_at", "chat_id", "customer_name", "whatsapp_number", "email",
-                            "service_type", "reason", "preferred_date", "preferred_time", "mode",
-                            "language_preference", "booking_status", "business_id", "updated_at"]
-            bookings_sheet.append_row(bookings_headers)
-        
-        print("✅ Sheets created successfully!")
-
-    setup_sheets()
+    
     
     def initialize(self):
         """Initialize Google Sheets connection"""
