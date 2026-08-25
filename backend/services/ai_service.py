@@ -111,53 +111,88 @@ class AIService:
             history = self._format_conversation_history(conversation.get("messages", []))
             
             # ✅ Build context summary for AI
-            context_summary = self._build_context_summary(context, collected_fields)
-            
-            # ✅ Build prompt with full context
+            # ✅ Get ALL extracted data from context
+
+
+# ✅ Build a STRONG context summary
+            context_summary = []
+            if context.get("name"):
+                context_summary.append(f"✅ Name: {context['name']} (ALREADY COLLECTED - DO NOT ASK AGAIN)")
+            if context.get("phone"):
+                context_summary.append(f"✅ Phone: {context['phone']} (ALREADY COLLECTED - DO NOT ASK AGAIN)")
+            if context.get("email"):
+                context_summary.append(f"✅ Email: {context['email']} (ALREADY COLLECTED - DO NOT ASK AGAIN)")
+            if context.get("service_type"):
+                context_summary.append(f"✅ Service: {context['service_type']} (ALREADY COLLECTED - DO NOT ASK AGAIN)")
+            if context.get("preferred_date"):
+                context_summary.append(f"✅ Date: {context['preferred_date']} (ALREADY COLLECTED - DO NOT ASK AGAIN)")
+            if context.get("preferred_time"):
+                context_summary.append(f"✅ Time: {context['preferred_time']} (ALREADY COLLECTED - DO NOT ASK AGAIN)")
+            if context.get("mode"):
+                context_summary.append(f"✅ Mode: {context['mode']} (ALREADY COLLECTED - DO NOT ASK AGAIN)")
+
+            context_summary_text = "\n".join(context_summary) if context_summary else "No information collected yet."
+
+            # ✅ Build prompt with FORCED instructions
             prompt = f"""
             {system_prompt}
-            
+
             ### Business Context from Knowledge Base:
             {rag_context if rag_context else "No specific context found. Use general knowledge."}
-            
+
             ### Conversation History:
             {history}
-            
+
             ### User Message:
             {message}
-            
+
             ### Current Phase: {phase}
             ### Language: {language}
-            
-            ### ✅ WHAT I ALREADY KNOW ABOUT THIS USER:
-            {context_summary}
-            
-            ### ✅ WHAT I HAVE ALREADY COLLECTED:
-            {', '.join(collected_fields) if collected_fields else 'Nothing yet'}
-            
-            ### ✅ IMPORTANT RULES (STRICTLY FOLLOW):
-            1. **NEVER ask for information I already have!**
-            2. Look at "WHAT I ALREADY KNOW" above.
-            3. If I already have name, phone, email, service_type - DO NOT ask again.
-            4. If the user says "I already said that" - apologize and move on.
-            5. Use the information I already have to answer their question.
-            6. Only ask for ONE piece of NEW information at a time.
-            7. If the user provides information I already have, acknowledge it and move forward.
-            
+
+            ### 🔴🔴🔴 CRITICAL: WHAT I ALREADY KNOW ABOUT THIS USER (DO NOT ASK FOR THESE):
+            {context_summary_text}
+
+            ### 🔴🔴🔴 STRICT RULES (MUST FOLLOW):
+            1. **LOOK AT "WHAT I ALREADY KNOW" ABOVE**
+            2. **If the user has already provided name, phone, email, date, time, or mode - DO NOT ask for them again.**
+            3. **Use ALL available information to answer their question directly.**
+            4. **If the user says "tomorrow at 9am offline" and you see that in the data, ACKNOWLEDGE IT and proceed.**
+            5. **ONLY ask for information that is NOT in the list above.**
+            6. **If all information is collected, confirm the booking and move to completion.**
+
+            ### Lead Collection Status:
+            - Name collected: {'name' in collected_fields}
+            - Phone collected: {'phone' in collected_fields}
+            - Email collected: {'email' in collected_fields}
+            - Service Interest collected: {'service_interest' in collected_fields}
+            - Date collected: {'preferred_date' in collected_fields}
+            - Time collected: {'preferred_time' in collected_fields}
+            - Mode collected: {'mode' in collected_fields}
+
             ### Instructions:
             1. Answer the user's question using the context
             2. Adapt to the language ({language})
-            3. If booking intent, follow booking flow
+            3. If booking intent, follow booking flow but USE the data you already have
             4. Be warm and conversational
-            
+
             Return your response as JSON:
             {{
                 "reply": "Your response text",
                 "intent": "booking|lead|general|calculation",
                 "phase": "lead_collection|booking|general|human_handoff",
-                "lead_collected": {str(lead_collected).lower()},
-                "lead_data": {{"name": "{context.get('name', '')}", "phone": "{context.get('phone', '')}", "email": "{context.get('email', '')}", "service_interest": "{context.get('service_type', '')}"}},
-                "booking_data": {{"service": "", "date": "{context.get('preferred_date', '')}", "time": "{context.get('preferred_time', '')}", "mode": "{context.get('mode', '')}"}},
+                "lead_collected": true,
+                "lead_data": {{
+                    "name": "{context.get('name', '')}",
+                    "phone": "{context.get('phone', '')}",
+                    "email": "{context.get('email', '')}",
+                    "service_interest": "{context.get('service_type', '')}"
+                }},
+                "booking_data": {{
+                    "service": "{context.get('service_type', '')}",
+                    "date": "{context.get('preferred_date', '')}",
+                    "time": "{context.get('preferred_time', '')}",
+                    "mode": "{context.get('mode', '')}"
+                }},
                 "needs_human_handoff": false
             }}
             """
