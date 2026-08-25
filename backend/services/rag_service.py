@@ -28,33 +28,34 @@ class RAGService:
         os.makedirs(self.pdf_dir, exist_ok=True)
     
     async def initialize(self):
-        """Initialize RAG with PDF documents"""
+    
         try:
-            # Initialize embeddings
+            # ✅ Use OpenRouter for embeddings
             if settings.USE_OPENROUTER:
-            # OpenRouter uses OpenAI-compatible API for embeddings
+                from langchain_openai import OpenAIEmbeddings
                 self.embeddings = OpenAIEmbeddings(
-                api_key=settings.OPENROUTER_API_KEY,
-                model="text-embedding-3-small",
-                base_url="https://openrouter.ai/api/v1"
-            )
+                    api_key=settings.OPENROUTER_API_KEY,
+                    model="text-embedding-3-small",
+                    base_url="https://openrouter.ai/api/v1"
+                )
+                logger.info("✅ Using OpenRouter for embeddings")
             elif settings.USE_GEMINI:
+                from langchain_google_genai import GoogleGenerativeAIEmbeddings
                 self.embeddings = GoogleGenerativeAIEmbeddings(
-                model="models/gemini-embedding-2",
-                google_api_key=settings.GEMINI_API_KEY
-            )
+                    model="models/gemini-embedding-2",
+                    google_api_key=settings.GEMINI_API_KEY
+                )
             else:
-            # Fallback to OpenAI
+                from langchain_openai import OpenAIEmbeddings
                 self.embeddings = OpenAIEmbeddings(
-                api_key=settings.OPENAI_API_KEY,
-                model="text-embedding-3-small"
-            )
+                    api_key=settings.OPENAI_API_KEY,
+                    model="text-embedding-3-small"
+                )
             
             # Load PDFs
             documents = await self.load_documents()
             
             if documents:
-                # Split into chunks
                 text_splitter = RecursiveCharacterTextSplitter(
                     chunk_size=self.chunk_size,
                     chunk_overlap=self.chunk_overlap,
@@ -65,19 +66,11 @@ class RAGService:
                 chunks = text_splitter.split_documents(documents)
                 logger.info(f"Created {len(chunks)} chunks from documents")
                 
-                # Create vector store
-                self.vectorstore = FAISS.from_documents(
-                    chunks, 
-                    self.embeddings
-                )
-                logger.info("Vector store initialized successfully")
+                self.vectorstore = FAISS.from_documents(chunks, self.embeddings)
+                logger.info("✅ Vector store initialized successfully")
             else:
                 logger.warning("No documents found in knowledge directory")
-                # Create empty vectorstore
-                self.vectorstore = FAISS.from_documents(
-                    [Document(page_content="No documents loaded")],
-                    self.embeddings
-                )
+                self.vectorstore = None
                 
         except Exception as e:
             logger.error(f"RAG initialization error: {str(e)}")
@@ -110,18 +103,35 @@ class RAGService:
         return documents
     
     async def query(self, query: str, k: int = 3) -> str:
-        """Query the RAG system"""
+
         if not self.vectorstore:
             logger.warning("Vectorstore not initialized")
             return ""
         
         try:
-            docs = self.vectorstore.similarity_search(query, k=k)
+            # ✅ Use similarity search with scores
+            docs = self.vectorstore.similarity_search_with_score(query, k=k)
+            
+            # ✅ Filter results with high relevance
+            filtered_docs = []
+            for doc, score in docs:
+                # Lower score = better match (cosine distance)
+                if score < 1.5:  # Adjust threshold as needed
+                    filtered_docs.append(doc.page_content)
+            
+            if not filtered_docs:
+                # ✅ Try with broader search
+                docs = self.vectorstore.similarity_search(query, k=k*2)
+                filtered_docs = [doc.page_content for doc in docs]
+            
             context = "\n\n---\n\n".join([
-                f"Content {i+1}:\n{doc.page_content}" 
-                for i, doc in enumerate(docs)
+                f"📄 Content {i+1}:\n{doc}" 
+                for i, doc in enumerate(filtered_docs[:5])
             ])
+            
+            logger.info(f"📚 RAG returned {len(filtered_docs)} chunks")
             return context
+            
         except Exception as e:
             logger.error(f"RAG query error: {str(e)}")
             return ""

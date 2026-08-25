@@ -36,6 +36,13 @@ class AIService:
             )
         else:
             self.openai_client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+        
+        # ✅ Force RAG initialization
+        import asyncio
+        try:
+            asyncio.create_task(self.rag_service.initialize())
+        except:
+            pass
     
     async def generate_response(self, message: str, conversation: Dict) -> Dict[str, Any]:
         """Generate AI response with RAG context"""
@@ -44,8 +51,39 @@ class AIService:
             language = detect_language(message)
             conversation["language"] = language
             
-            # Get RAG context
-            rag_context = await self.rag_service.query(message)
+            # ✅ Get RAG context with better retrieval
+            # ✅ Get RAG context with better error handling
+            rag_context = ""
+            try:
+                # Check if vectorstore exists, if not, initialize it
+                if self.rag_service and not self.rag_service.vectorstore:
+                    logger.info("🔄 Vectorstore not initialized, initializing now...")
+                    await self.rag_service.initialize()
+                
+                if self.rag_service and self.rag_service.vectorstore:
+                    rag_context = await self.rag_service.query(message)
+                    if rag_context:
+                        logger.info(f"📚 RAG context retrieved: {rag_context[:300]}...")
+                    else:
+                        logger.warning("⚠️ RAG query returned empty result")
+                else:
+                    logger.warning("⚠️ Vectorstore still not initialized after attempt")
+            except Exception as e:
+                logger.error(f"❌ RAG error: {str(e)}")
+                rag_context = ""
+
+            # ✅ If RAG context is empty, try a direct PDF search
+            if not rag_context:
+                try:
+                    from services.rag_service import RAGService
+                    temp_rag = RAGService()
+                    await temp_rag.initialize()
+                    if temp_rag.vectorstore:
+                        rag_context = await temp_rag.query(message)
+                        self.rag_service = temp_rag
+                        logger.info(f"🔄 Retrieved RAG from temporary instance: {rag_context[:200] if rag_context else 'None'}")
+                except Exception as e:
+                    logger.error(f"❌ Fallback RAG error: {str(e)}")
             
             # Determine phase
             phase = conversation.get("phase", "greeting")
@@ -69,7 +107,7 @@ class AIService:
                     collected_fields.append("preferred_date")
                     break
             
-            # ✅ Extract time from message (e.g., "10am", "10:00", "10")
+            # ✅ Extract time from message
             time_match = re.search(r'(\d{1,2})\s*(?:am|pm|:|o\'clock)', message.lower())
             if time_match and "preferred_time" not in collected_fields:
                 time_str = time_match.group(0)
@@ -110,11 +148,7 @@ class AIService:
             # Build conversation history
             history = self._format_conversation_history(conversation.get("messages", []))
             
-            # ✅ Build context summary for AI
-            # ✅ Get ALL extracted data from context
-
-
-# ✅ Build a STRONG context summary
+            # ✅ Build context summary
             context_summary = []
             if context.get("name"):
                 context_summary.append(f"✅ Name: {context['name']} (ALREADY COLLECTED - DO NOT ASK AGAIN)")
@@ -133,69 +167,69 @@ class AIService:
 
             context_summary_text = "\n".join(context_summary) if context_summary else "No information collected yet."
 
-            # ✅ Build prompt with FORCED instructions
+            # ✅ Build prompt with FORCED RAG instructions
             prompt = f"""
-            {system_prompt}
+{system_prompt}
 
-            ### Business Context from Knowledge Base:
-            {rag_context if rag_context else "No specific context found. Use general knowledge."}
+### 🔴🔴🔴 BUSINESS INFORMATION FROM COMPANY PDF (YOU MUST USE THIS EXACT INFORMATION):
+{rag_context if rag_context else "No specific business information found in the PDF."}
 
-            ### Conversation History:
-            {history}
+### 🚨🚨🚨 CRITICAL RULES FOR USING PDF DATA:
+1. **The "BUSINESS INFORMATION FROM COMPANY PDF" above is the ONLY source of truth for business details.**
+2. **DO NOT use your general knowledge for branch addresses, phone numbers, or pricing.**
+3. **If the PDF has a branch address, use EXACTLY that address. DO NOT invent or modify it.**
+4. **If the information is not in the PDF, say "I don't have that information in my database."**
+5. **NEVER say "123 Solar Street" or any other fake address. ONLY use what's in the PDF.**
 
-            ### User Message:
-            {message}
+### Conversation History:
+{history}
 
-            ### Current Phase: {phase}
-            ### Language: {language}
+### User Message:
+{message}
 
-            ### 🔴🔴🔴 CRITICAL: WHAT I ALREADY KNOW ABOUT THIS USER (DO NOT ASK FOR THESE):
-            {context_summary_text}
+### Current Phase: {phase}
+### Language: {language}
 
-            ### 🔴🔴🔴 STRICT RULES (MUST FOLLOW):
-            1. **LOOK AT "WHAT I ALREADY KNOW" ABOVE**
-            2. **If the user has already provided name, phone, email, date, time, or mode - DO NOT ask for them again.**
-            3. **Use ALL available information to answer their question directly.**
-            4. **If the user says "tomorrow at 9am offline" and you see that in the data, ACKNOWLEDGE IT and proceed.**
-            5. **ONLY ask for information that is NOT in the list above.**
-            6. **If all information is collected, confirm the booking and move to completion.**
+### ✅ WHAT I ALREADY KNOW ABOUT THIS USER (DO NOT ASK FOR THESE):
+{context_summary_text}
 
-            ### Lead Collection Status:
-            - Name collected: {'name' in collected_fields}
-            - Phone collected: {'phone' in collected_fields}
-            - Email collected: {'email' in collected_fields}
-            - Service Interest collected: {'service_interest' in collected_fields}
-            - Date collected: {'preferred_date' in collected_fields}
-            - Time collected: {'preferred_time' in collected_fields}
-            - Mode collected: {'mode' in collected_fields}
+### Lead Collection Status:
+- Name collected: {'name' in collected_fields}
+- Phone collected: {'phone' in collected_fields}
+- Email collected: {'email' in collected_fields}
+- Service Interest collected: {'service_interest' in collected_fields}
+- Date collected: {'preferred_date' in collected_fields}
+- Time collected: {'preferred_time' in collected_fields}
+- Mode collected: {'mode' in collected_fields}
 
-            ### Instructions:
-            1. Answer the user's question using the context
-            2. Adapt to the language ({language})
-            3. If booking intent, follow booking flow but USE the data you already have
-            4. Be warm and conversational
+### Instructions:
+1. **ONLY answer using the PDF context provided above.**
+2. If the user asks about branches, use the EXACT addresses from the PDF.
+3. If the user asks about pricing, use the EXACT prices from the PDF.
+4. Be warm and conversational.
+5. Adapt to the language ({language}).
 
-            Return your response as JSON:
-            {{
-                "reply": "Your response text",
-                "intent": "booking|lead|general|calculation",
-                "phase": "lead_collection|booking|general|human_handoff",
-                "lead_collected": true,
-                "lead_data": {{
-                    "name": "{context.get('name', '')}",
-                    "phone": "{context.get('phone', '')}",
-                    "email": "{context.get('email', '')}",
-                    "service_interest": "{context.get('service_type', '')}"
-                }},
-                "booking_data": {{
-                    "service": "{context.get('service_type', '')}",
-                    "date": "{context.get('preferred_date', '')}",
-                    "time": "{context.get('preferred_time', '')}",
-                    "mode": "{context.get('mode', '')}"
-                }},
-                "needs_human_handoff": false
-            }}
-            """
+Return your response as JSON:
+{{
+    "reply": "Your response text (based ONLY on PDF data)",
+    "intent": "booking|lead|general|calculation",
+    "phase": "lead_collection|booking|general|human_handoff",
+    "lead_collected": {str(lead_collected).lower()},
+    "lead_data": {{
+        "name": "{context.get('name', '')}",
+        "phone": "{context.get('phone', '')}",
+        "email": "{context.get('email', '')}",
+        "service_interest": "{context.get('service_type', '')}"
+    }},
+    "booking_data": {{
+        "service": "{context.get('service_type', '')}",
+        "date": "{context.get('preferred_date', '')}",
+        "time": "{context.get('preferred_time', '')}",
+        "mode": "{context.get('mode', '')}"
+    }},
+    "needs_human_handoff": false
+}}
+"""
             
             # Generate response
             if self.use_openrouter:

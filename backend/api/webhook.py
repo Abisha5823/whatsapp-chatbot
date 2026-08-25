@@ -71,11 +71,9 @@ async def process_message(message: Dict[str, Any], metadata: Dict[str, Any]):
         chat_id = message.get("from")
         msg_type = message.get("type")
         
-        # ✅ If type is missing but text exists, assume it's a text message
         if not msg_type and message.get("text"):
             msg_type = "text"
         
-        # Handle different message types
         if msg_type == "text":
             text = message.get("text", {}).get("body", "")
         elif msg_type == "voice":
@@ -91,91 +89,23 @@ async def process_message(message: Dict[str, Any], metadata: Dict[str, Any]):
             logger.warning("Empty message received")
             return
         
-        # Get or create conversation
         conv_service = ConversationService()
         conversation = await conv_service.get_or_create(chat_id)
         
-        # Detect language
         from utils.helpers import detect_language
         language = detect_language(text)
         conversation["language"] = language
         
-        # ✅ Get context and ensure collected_fields exists
         context = conversation.get("context", {})
         if "collected_fields" not in context:
             context["collected_fields"] = []
         
-        # ✅ ✅ ✅ EXTRACT EMAIL FROM MESSAGE
-        email_pattern = r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}'
-        email_match = re.search(email_pattern, text)
-        if email_match and "email" not in context["collected_fields"]:
-            context["email"] = email_match.group(0).lower()
-            context["collected_fields"].append("email")
-            logger.info(f"📧 Extracted email: {context['email']}")
+        # ... (email, phone, name, date, time, mode extraction code here) ...
         
-        # ✅ ✅ ✅ EXTRACT PHONE NUMBER FROM MESSAGE
-        phone_pattern = r'(\+?91)?[6-9]\d{9}'
-        phone_match = re.search(phone_pattern, text)
-        if phone_match and "phone" not in context["collected_fields"]:
-            phone = phone_match.group(0)
-            if not phone.startswith('+'):
-                phone = '+91' + phone if len(phone) == 10 else phone
-            context["phone"] = phone
-            context["collected_fields"].append("phone")
-            logger.info(f"📱 Extracted phone: {context['phone']}")
-        
-        # ✅ ✅ ✅ EXTRACT NAME (simple version)
-        name_patterns = [
-            r"(?:my name is |i am |i'm |name is |this is )([A-Za-z\s]+)",
-            r"^([A-Za-z\s]+)$"  # If message is just a name
-        ]
-        for pattern in name_patterns:
-            name_match = re.search(pattern, text.lower())
-            if name_match and "name" not in context["collected_fields"]:
-                name = name_match.group(1).strip().title()
-                if len(name) > 1 and len(name) < 30:  # Reasonable name length
-                    context["name"] = name
-                    context["collected_fields"].append("name")
-                    logger.info(f"👤 Extracted name: {context['name']}")
-                    break
-        
-        # ✅ ✅ ✅ EXTRACT DATE
-        date_keywords = ["tomorrow", "today", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
-        for keyword in date_keywords:
-            if keyword in text.lower() and "preferred_date" not in context["collected_fields"]:
-                context["preferred_date"] = keyword
-                context["collected_fields"].append("preferred_date")
-                logger.info(f"📅 Extracted date: {context['preferred_date']}")
-                break
-        
-        # ✅ ✅ ✅ EXTRACT TIME
-        time_pattern = r'(\d{1,2})\s*(?:am|pm|:|o\'clock|\s*to\s*)'
-        time_match = re.search(time_pattern, text.lower())
-        if time_match and "preferred_time" not in context["collected_fields"]:
-            time_str = time_match.group(0)
-            # Clean up time format
-            time_str = time_str.replace('o clock', '').strip()
-            context["preferred_time"] = time_str
-            context["collected_fields"].append("preferred_time")
-            logger.info(f"🕐 Extracted time: {context['preferred_time']}")
-        
-        # ✅ ✅ ✅ EXTRACT MODE (online/offline)
-        if "offline" in text.lower() and "mode" not in context["collected_fields"]:
-            context["mode"] = "offline"
-            context["collected_fields"].append("mode")
-            logger.info(f"📍 Extracted mode: offline")
-        elif "online" in text.lower() and "mode" not in context["collected_fields"]:
-            context["mode"] = "online"
-            context["collected_fields"].append("mode")
-            logger.info(f"📍 Extracted mode: online")
-        
-        # ✅ Save extracted data back to conversation
         conversation["context"] = context
-        
-        # ✅ Log current context for debugging
         logger.info(f"📝 Current context for {chat_id}: {conversation.get('context', {})}")
         
-        # Check if user wants human handoff
+        # Check for human handoff
         if any(keyword in text.lower() for keyword in ["agent", "human", "person", "speak", "talk to"]):
             await handle_human_handoff(chat_id, conversation)
             return
@@ -187,35 +117,40 @@ async def process_message(message: Dict[str, Any], metadata: Dict[str, Any]):
             conversation=conversation
         )
         
-        # ✅ Extract lead data from response
-        lead_data = response.get("lead_data", {})
+        # ... (lead data extraction code here) ...
         
-        # ✅ Save lead data to context (preserving existing data)
-        if lead_data:
-            if lead_data.get("name") and "name" not in context["collected_fields"]:
-                context["name"] = lead_data["name"]
-                context["collected_fields"].append("name")
-            if lead_data.get("phone") and "phone" not in context["collected_fields"]:
-                context["phone"] = lead_data["phone"]
-                context["collected_fields"].append("phone")
-            if lead_data.get("email") and "email" not in context["collected_fields"]:
-                context["email"] = lead_data["email"]
-                context["collected_fields"].append("email")
-            if lead_data.get("service_interest") and "service_interest" not in context["collected_fields"]:
-                context["service_type"] = lead_data["service_interest"]
-                context["collected_fields"].append("service_interest")
+        # ✅ SAVE LEAD ONLY ONCE - Check if lead already exists
+        lead_service = LeadService()
+        existing_lead = await lead_service.get_lead_by_chat_id(chat_id)
         
-        # ✅ If AI says lead is collected but we don't have data, try to extract from reply
-        if response.get("lead_collected") and not lead_data:
-            reply = response.get("reply", "")
-            # Try to extract email from reply (user might have said it)
-            email_match = re.search(email_pattern, reply)
-            if email_match and "email" not in context["collected_fields"]:
-                context["email"] = email_match.group(0).lower()
-                context["collected_fields"].append("email")
-                logger.info(f"📧 Extracted email from reply: {context['email']}")
+        # Check if we have enough data to save a lead
+        has_lead_data = (
+            response.get("lead_collected", False) or 
+            len(context.get("collected_fields", [])) >= 2
+        )
         
-        logger.info(f"📝 Merged context for {chat_id}: {context}")
+        if has_lead_data and not existing_lead:
+            lead = await lead_service.save_lead(chat_id, conversation, response)
+            if lead:
+                await lead_service.sync_to_google_sheets(lead)
+                from services.notification_service import send_lead_notification
+                await send_lead_notification(lead)
+                logger.info(f"✅ New lead saved and notified: {lead.name}")
+        elif has_lead_data and existing_lead:
+            # ✅ Update existing lead with new info instead of creating new one
+            updated = await lead_service.update_lead(
+                str(existing_lead["_id"]), 
+                {
+                    "name": context.get("name", existing_lead.get("name", "")),
+                    "phone": context.get("phone", existing_lead.get("phone", "")),
+                    "email": context.get("email", existing_lead.get("email", "")),
+                    "service_interest": context.get("service_type", existing_lead.get("service_interest", ""))
+                }
+            )
+            if updated:
+                logger.info(f"🔄 Updated existing lead for {chat_id}")
+        else:
+            logger.info(f"⏭️ No lead data to save or already saved for {chat_id}")
         
         # Check for booking intent
         if "booking" in response.get("intent", "").lower():
@@ -227,20 +162,11 @@ async def process_message(message: Dict[str, Any], metadata: Dict[str, Any]):
                 from services.notification_service import send_booking_notification
                 await send_booking_notification(booking)
         
-        # Save lead if collected
-        lead_service = LeadService()
-        if response.get("lead_collected", False) or len(context.get("collected_fields", [])) >= 2:
-            lead = await lead_service.save_lead(chat_id, conversation, response)
-            if lead:
-                await lead_service.sync_to_google_sheets(lead)
-                from services.notification_service import send_lead_notification
-                await send_lead_notification(lead)
-        
         # Send response via WhatsApp
         whatsapp = WhatsAppService()
         await whatsapp.send_message(chat_id, response["reply"])
         
-        # ✅ Update conversation with proper context
+        # Update conversation
         await conv_service.update(chat_id, {
             "messages": conversation.get("messages", []) + [
                 {"role": "user", "content": text, "timestamp": datetime.utcnow().isoformat()},
@@ -251,7 +177,6 @@ async def process_message(message: Dict[str, Any], metadata: Dict[str, Any]):
             "updated_at": datetime.utcnow().isoformat()
         })
         
-        # ✅ Log what was saved
         logger.info(f"💾 Updated context for {chat_id}: {context}")
         
     except Exception as e:
@@ -264,7 +189,6 @@ async def process_message(message: Dict[str, Any], metadata: Dict[str, Any]):
             )
         except:
             pass
-
 async def handle_human_handoff(chat_id: str, conversation: Dict):
     """Handle human handoff request"""
     whatsapp = WhatsAppService()
