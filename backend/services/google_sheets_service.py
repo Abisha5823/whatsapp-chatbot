@@ -150,25 +150,26 @@ class GoogleSheetsService:
             if not created_at:
                 created_at = datetime.now().isoformat()
             
+            # ✅ Build row with email column (Column E)
             row = [
-                    booking_data.get("created_at", datetime.now().isoformat()),  # Column A
-                    booking_data.get("chat_id", ""),                              # Column B
-                    booking_data.get("customer_name", ""),                        # Column C
-                    booking_data.get("whatsapp_number", ""),                      # Column D
-                    booking_data.get("email", ""),                                # Column E
-                    booking_data.get("service_type", ""),                         # Column F
-                    booking_data.get("reason", ""),                               # Column G
-                    booking_data.get("preferred_date", ""),                       # Column H
-                    booking_data.get("preferred_time", ""),                       # Column I
-                    booking_data.get("mode", ""),                                 # Column J
-                    booking_data.get("language_preference", "en"),                # Column K
-                    booking_data.get("booking_status", "pending"),                # Column L
-                    booking_data.get("business_id", ""),                          # Column M
-                    booking_data.get("updated_at", "")                            # Column N
-                ]
+                created_at,                                          # Column A
+                booking_data.get("chat_id", ""),                     # Column B
+                booking_data.get("customer_name", ""),               # Column C
+                booking_data.get("whatsapp_number", ""),             # Column D
+                booking_data.get("email", ""),                       # ✅ Column E - EMAIL
+                booking_data.get("service_type", ""),                # Column F
+                booking_data.get("reason", ""),                      # Column G
+                booking_data.get("preferred_date", ""),              # Column H
+                booking_data.get("preferred_time", ""),              # Column I
+                booking_data.get("mode", ""),                        # Column J
+                booking_data.get("language_preference", "en"),       # Column K
+                booking_data.get("booking_status", "pending"),       # Column L
+                booking_data.get("business_id", ""),                 # Column M
+                booking_data.get("updated_at", "")                   # Column N
+            ]
             
             self.booking_sheet.append_row(row)
-            logger.info(f"✅ Booking appended to Google Sheets: {booking_data.get('customer_name')}")
+            logger.info(f"✅ Booking appended to Google Sheets: {booking_data.get('customer_name')} (Email: {booking_data.get('email')})")
             return True
             
         except Exception as e:

@@ -64,7 +64,7 @@ class BookingService:
             return None
     
     async def create_manual_booking(self, booking_data: Dict[str, Any]) -> Optional[Booking]:
-        """✅ NEW: Create booking manually from webhook data"""
+    
         try:
             booking = Booking(
                 chat_id=booking_data.get("chat_id", ""),
@@ -82,16 +82,22 @@ class BookingService:
                 updated_at=datetime.utcnow().isoformat()
             )
             
-            # Save to MongoDB
+            # ✅ Save to MongoDB
             collection = await get_collection("bookings")
             result = await collection.insert_one(booking.dict())
             
-            # Save to Google Sheets
+            # ✅ ✅ ✅ ADD EMAIL TO BOOKING DATA FOR GOOGLE SHEETS
+            booking_dict = booking.dict()
+            booking_dict["email"] = booking_data.get("email", "")  # ✅ Add email field
+            
+            # ✅ Save to Google Sheets with email
             try:
                 self.sheets_service = GoogleSheetsService()
-                sheet_result = await self.sheets_service.append_booking(booking.dict())
+                sheet_result = await self.sheets_service.append_booking(booking_dict)
                 if sheet_result:
-                    logger.info(f"✅ Booking saved to Google Sheets: {booking.customer_name}")
+                    logger.info(f"✅ Booking saved to Google Sheets: {booking.customer_name} (Email: {booking_dict.get('email')})")
+                else:
+                    logger.warning(f"⚠️ Google Sheets save failed for booking: {booking.customer_name}")
             except Exception as e:
                 logger.error(f"❌ Google Sheets error: {str(e)}")
             

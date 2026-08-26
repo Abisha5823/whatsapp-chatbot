@@ -239,6 +239,7 @@ async def process_message(message: Dict[str, Any], metadata: Dict[str, Any]):
                 "chat_id": chat_id,
                 "customer_name": context.get("name", "Unknown"),
                 "whatsapp_number": context.get("phone", ""),
+                "email": context.get("email", ""),  
                 "service_type": context.get("service_type", "solar installation"),
                 "reason": context.get("reason", ""),
                 "preferred_date": context.get("preferred_date", ""),
