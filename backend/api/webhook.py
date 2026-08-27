@@ -218,7 +218,10 @@ async def process_message(message: Dict[str, Any], metadata: Dict[str, Any]):
         if any(keyword in text.lower() for keyword in ["agent", "human", "person", "speak", "talk to"]):
             await handle_human_handoff(chat_id, conversation)
             return
+        is_confirmation = any(word in text.lower() for word in ["yes", "confirm", "ok", "sure", "confirm pannalama", "go ahead", "yeah", "yep"])
         
+        # ✅ Check if booking is already confirmed
+        booking_already_confirmed = context.get("booking_confirmed", False)
         # Process with AI
         ai_service = AIService()
         response = await ai_service.generate_response(
@@ -227,45 +230,47 @@ async def process_message(message: Dict[str, Any], metadata: Dict[str, Any]):
         )
         
         # ✅ Check if booking is confirmed
+        # ✅ Check if booking is already confirmed
         booking_confirmed = is_confirmation and "preferred_date" in context.get("collected_fields", [])
         
-        if booking_confirmed:
+        if booking_confirmed and not booking_already_confirmed:
             logger.info(f"✅ Booking confirmed by user for {chat_id}")
-            logger.info(f"📋 Booking data: name={context.get('name')}, phone={context.get('phone')}, email={context.get('email')}, date={context.get('preferred_date')}, time={context.get('preferred_time')}, mode={context.get('mode')}")
             
-            # Create booking with FRESH data
             booking_service = BookingService()
             booking_data = {
                 "chat_id": chat_id,
                 "customer_name": context.get("name", "Unknown"),
                 "whatsapp_number": context.get("phone", ""),
-                "email": context.get("email", ""),  
+                "email": context.get("email", ""),
                 "service_type": context.get("service_type", "solar installation"),
                 "reason": context.get("reason", ""),
                 "preferred_date": context.get("preferred_date", ""),
                 "preferred_time": context.get("preferred_time", ""),
                 "mode": context.get("mode", "offline"),
                 "language_preference": language,
-                "booking_status": "confirmed",
-                "email": context.get("email", "")
+                "booking_status": "confirmed"
             }
             
             booking = await booking_service.create_manual_booking(booking_data)
             if booking:
-                # Send email notification
+                # ✅ Mark booking as confirmed
+                context["booking_confirmed"] = True
+                conversation["context"] = context
+                
                 from services.notification_service import send_booking_notification
                 await send_booking_notification(booking)
                 logger.info(f"✅ Booking notification sent for {context.get('name')}")
-            else:
-                logger.error("❌ Failed to create booking")
-        
-        # Save lead ONLY ONCE
-        lead_service = LeadService()
-        existing_lead = await lead_service.get_lead_by_chat_id(chat_id)
-        has_lead_data = (
-            "name" in context.get("collected_fields", []) and 
-            "phone" in context.get("collected_fields", [])
-        )
+        else:
+            if booking_already_confirmed:
+                logger.info(f"⏭️ Booking already confirmed for {chat_id}, skipping duplicate")
+            
+            # Save lead ONLY ONCE
+            lead_service = LeadService()
+            existing_lead = await lead_service.get_lead_by_chat_id(chat_id)
+            has_lead_data = (
+                "name" in context.get("collected_fields", []) and 
+                "phone" in context.get("collected_fields", [])
+            )
         
         if has_lead_data and not existing_lead:
             lead = await lead_service.save_lead(chat_id, conversation, response)
